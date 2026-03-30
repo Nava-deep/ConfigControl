@@ -1,0 +1,66 @@
+services:
+  api:
+    build:
+      context: .
+    container_name: config-control-plane
+    environment:
+      CONFIG_SERVICE_DATABASE_URL: postgresql+psycopg://config:config@postgres:5432/configdb
+      CONFIG_SERVICE_REDIS_URL: redis://redis:6379/0
+      CONFIG_SERVICE_USE_REDIS: "true"
+      CONFIG_SERVICE_CANARY_POLL_INTERVAL_SECONDS: "0.5"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health/ready').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16
+    container_name: config-postgres
+    environment:
+      POSTGRES_DB: configdb
+      POSTGRES_USER: config
+      POSTGRES_PASSWORD: config
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U config -d configdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: config-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: config-prometheus
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  postgres_data:

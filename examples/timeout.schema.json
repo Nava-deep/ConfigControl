@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": ["timeout_ms"],
+  "additionalProperties": false
+}
