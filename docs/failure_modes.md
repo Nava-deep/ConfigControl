@@ -18,6 +18,7 @@
 
 - `ConfigClient.get_typed()` returns the cached last-known-good value if the fetch fails.
 - Websocket watch reconnects with backoff.
+- Anonymous failure telemetry becomes best-effort only; failure reports are dropped rather than blocking the app.
 - Once connectivity returns, the client re-fetches the resolved config and converges without a restart.
 
 ## Canary regression

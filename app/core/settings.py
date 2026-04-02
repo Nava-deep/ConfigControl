@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     websocket_reconnect_seconds: float = 1.0
     notification_channel: str = "config-events"
     instance_id: str = Field(default_factory=lambda: uuid4().hex)
+    telemetry_hash_salt: str = "config-control-plane-demo-salt"
 
 
 @lru_cache(maxsize=1)

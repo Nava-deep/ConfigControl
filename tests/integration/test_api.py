@@ -242,3 +242,56 @@ def test_invalid_version_query_returns_422(client):
         params={"version": "not-a-version"},
     )
     assert response.status_code == 422
+
+
+def test_anonymous_failure_telemetry_is_ingested_and_summarized(client):
+    assert create_version(client, 2000).status_code == 201
+
+    report = client.post(
+        "/telemetry/failures",
+        headers=READER_HEADERS,
+        json={
+            "config_name": "checkout-service.timeout",
+            "target": "checkout-service",
+            "source": "demo-client",
+            "error_type": "RuntimeError",
+            "fingerprint": "0123456789abcdef0123456789abcdef",
+            "anonymous_installation_id": "anon-installation-1234567890",
+            "config_version": 1,
+            "config_source": "stable",
+            "sdk_version": "0.1.0",
+            "app_version": "demo-client",
+            "runtime": "python-3.14.3",
+            "metadata": {
+                "simulate_failure_every": 3,
+                "stack_trace": "should-be-dropped",
+                "safe_note": "kept",
+            },
+        },
+    )
+    assert report.status_code == 202, report.text
+    body = report.json()
+    assert body["fingerprint"] == "0123456789abcdef0123456789abcdef"
+    assert body["anonymous_installation_hash"] != "anon-installation-1234567890"
+
+    events = client.get(
+        "/telemetry/failures",
+        headers=ADMIN_HEADERS,
+        params={"config_name": "checkout-service.timeout"},
+    )
+    assert events.status_code == 200
+    event = events.json()[0]
+    assert event["error_type"] == "RuntimeError"
+    assert event["metadata"]["safe_note"] == "kept"
+    assert "stack_trace" not in event["metadata"]
+
+    summary = client.get(
+        "/telemetry/failures/summary",
+        headers=ADMIN_HEADERS,
+        params={"config_name": "checkout-service.timeout", "window_minutes": 60},
+    )
+    assert summary.status_code == 200
+    top = summary.json()[0]
+    assert top["event_count"] == 1
+    assert top["distinct_installations"] == 1
+    assert top["latest_config_version"] == 1

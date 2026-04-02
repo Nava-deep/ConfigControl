@@ -6,6 +6,7 @@ Centralized configuration management service with immutable versioning, typed-sc
 
 - Immutable versions + target-specific stable pointers model the kind of safety rails used in large infra teams.
 - Deterministic canary routing and automatic rollback show rollout discipline, not just CRUD.
+- Anonymous client failure telemetry shows how runtime issues feed back into the control plane without collecting raw crash dumps.
 - The repo includes docs, CI, Docker Compose, Kubernetes manifests, Prometheus metrics, and incident reports so it reads like a serious systems project.
 
 ## Features
@@ -19,6 +20,7 @@ Centralized configuration management service with immutable versioning, typed-sc
 - Audit log trail for every mutation
 - Typed Python SDK with TTL cache + last-known-good fallback
 - Demo microservice showing live hot reload
+- Anonymous client failure telemetry with stable fingerprints, version context, and server-side summaries
 - Redis-backed multi-instance event fanout for websocket hot reload
 - Prometheus metrics plus readiness/liveness probes
 
@@ -113,6 +115,20 @@ Simulate a bad canary metric:
   --value 0.02
 ```
 
+Inspect anonymous client failure summaries:
+
+```bash
+.venv/bin/configctl failure-summary \
+  --name checkout-service.timeout \
+  --window-minutes 60
+```
+
+List recent sanitized failure events:
+
+```bash
+.venv/bin/configctl failures --name checkout-service.timeout --limit 20
+```
+
 Inspect the audit trail:
 
 ```bash
@@ -131,6 +147,9 @@ Inspect the audit trail:
 - `POST /configs/{name}/schema/dry-run`
 - `GET /audit?name=...`
 - `POST /simulation/metrics`
+- `POST /telemetry/failures`
+- `GET /telemetry/failures`
+- `GET /telemetry/failures/summary`
 - `GET /watch/longpoll`
 - `WS /watch/ws`
 - `GET /metrics`
@@ -149,6 +168,29 @@ The service records `X-User-Id` in audit logs for all mutations.
 
 Websocket clients must also send `X-User-Id` and `X-Role` headers. Reader subscriptions must be scoped by `config_name` or `target`.
 
+## Anonymous Failure Telemetry
+
+The Python SDK can report application failures back to the control plane without shipping raw stack traces or user identifiers.
+
+What gets sent:
+
+- config name and target
+- failure source such as `demo-client` or `request-path`
+- exception type
+- stable fingerprint derived from exception type and frame names
+- config version/source active at the time of failure
+- anonymous installation ID generated locally by the SDK
+- sanitized metadata such as runtime or safe numeric counters
+
+What does not get stored:
+
+- raw `client_id`
+- raw stack traces
+- arbitrary error messages
+- user PII fields such as `email`, `token`, or `username`
+
+The control plane hashes the anonymous installation ID server-side before storage and exposes aggregated summaries through `/telemetry/failures/summary`.
+
 ## Testing
 
 ```bash
@@ -160,6 +202,7 @@ Current coverage focus:
 - config creation and immutable version history
 - hot-reload rollout notifications over websocket
 - automatic canary rollback when synthetic metrics degrade
+- anonymous client failure telemetry ingestion and summary aggregation
 - SDK cache fallback when the control plane is unavailable
 
 ## Repo guide

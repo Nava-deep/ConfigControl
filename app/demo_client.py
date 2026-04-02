@@ -20,6 +20,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target", default="checkout-service")
     parser.add_argument("--client-id", default="demo-client-a")
     parser.add_argument("--ttl", type=int, default=30)
+    parser.add_argument("--app-version", default="demo-client")
+    parser.add_argument("--simulate-failure-every", type=int, default=0)
     return parser.parse_args()
 
 
@@ -31,23 +33,39 @@ async def run() -> None:
         target=args.target,
         ttl_seconds=args.ttl,
     )
-    current = client.get_typed(args.name, TimeoutConfig)
-    print(f"[{datetime.now().isoformat()}] boot config -> timeout_ms={current.timeout_ms}")
+    try:
+        current = client.get_typed(args.name, TimeoutConfig)
+        print(f"[{datetime.now().isoformat()}] boot config -> timeout_ms={current.timeout_ms}")
 
-    async def on_update(config: TimeoutConfig, event: dict) -> None:
-        print(
-            f"[{datetime.now().isoformat()}] {event['event']} "
-            f"version={event['version']} stable={event['stable_version']} "
-            f"timeout_ms={config.timeout_ms}"
+        async def on_update(config: TimeoutConfig, event: dict) -> None:
+            print(
+                f"[{datetime.now().isoformat()}] {event['event']} "
+                f"version={event['version']} stable={event['stable_version']} "
+                f"timeout_ms={config.timeout_ms}"
+            )
+
+        async def worker() -> None:
+            handled_requests = 0
+            while True:
+                config = client.get_typed(args.name, TimeoutConfig)
+                handled_requests += 1
+                if args.simulate_failure_every and handled_requests % args.simulate_failure_every == 0:
+                    raise RuntimeError("simulated request-path failure")
+                print(f"[{datetime.now().isoformat()}] request handled with timeout_ms={config.timeout_ms}")
+                await asyncio.sleep(3)
+
+        await asyncio.gather(worker(), client.watch(args.name, TimeoutConfig, on_update))
+    except Exception as exc:
+        client.report_failure(
+            args.name,
+            exc,
+            source="demo-client",
+            app_version=args.app_version,
+            metadata={"simulate_failure_every": args.simulate_failure_every or None},
         )
-
-    async def worker() -> None:
-        while True:
-            config = client.get_typed(args.name, TimeoutConfig)
-            print(f"[{datetime.now().isoformat()}] request handled with timeout_ms={config.timeout_ms}")
-            await asyncio.sleep(3)
-
-    await asyncio.gather(worker(), client.watch(args.name, TimeoutConfig, on_update))
+        raise
+    finally:
+        client.close()
 
 
 def main() -> None:

@@ -22,6 +22,12 @@ from app.schemas.config import (
     SimulationMetricUpdate,
     VersionHistoryEntry,
 )
+from app.schemas.telemetry import (
+    FailureTelemetryEventResponse,
+    FailureTelemetryRequest,
+    FailureTelemetryResponse,
+    FailureTelemetrySummaryResponse,
+)
 
 router = APIRouter()
 
@@ -147,6 +153,49 @@ async def set_simulation_metric(
     _: Actor = Depends(require_role("admin", "operator")),
 ):
     return container_from_request(request).config_service.set_metric(payload)
+
+
+@router.post("/telemetry/failures", response_model=FailureTelemetryResponse, status_code=status.HTTP_202_ACCEPTED)
+async def ingest_failure_telemetry(
+    payload: FailureTelemetryRequest,
+    request: Request,
+    _: Actor = Depends(get_actor),
+):
+    return container_from_request(request).telemetry_service.ingest_failure(payload)
+
+
+@router.get("/telemetry/failures", response_model=list[FailureTelemetryEventResponse])
+async def list_failure_telemetry(
+    request: Request,
+    config_name: str | None = Query(default=None),
+    target: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    _: Actor = Depends(require_role("admin", "operator")),
+):
+    return container_from_request(request).telemetry_service.list_failures(
+        config_name=config_name,
+        target=target,
+        source=source,
+        limit=limit,
+    )
+
+
+@router.get("/telemetry/failures/summary", response_model=list[FailureTelemetrySummaryResponse])
+async def summarize_failure_telemetry(
+    request: Request,
+    config_name: str | None = Query(default=None),
+    target: str | None = Query(default=None),
+    window_minutes: int = Query(default=60, ge=1, le=10080),
+    limit: int = Query(default=50, ge=1, le=200),
+    _: Actor = Depends(require_role("admin", "operator")),
+):
+    return container_from_request(request).telemetry_service.summarize_failures(
+        config_name=config_name,
+        target=target,
+        window_minutes=window_minutes,
+        limit=limit,
+    )
 
 
 @router.get("/watch/longpoll", response_model=NotificationEvent | None)

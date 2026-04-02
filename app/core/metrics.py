@@ -25,6 +25,11 @@ ROLLOUT_EVENTS = Counter(
     "Rollout transitions by status.",
     ["status"],
 )
+CLIENT_FAILURE_REPORTS = Counter(
+    "config_service_client_failure_reports_total",
+    "Anonymous client failure reports ingested by the control plane.",
+    ["target", "source"],
+)
 ACTIVE_WEBSOCKETS = Gauge(
     "config_service_active_websockets",
     "Number of active websocket connections.",

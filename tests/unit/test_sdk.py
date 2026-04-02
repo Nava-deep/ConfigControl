@@ -92,3 +92,54 @@ def test_sdk_cache_is_scoped_by_requested_version(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         client.get_typed("checkout-service.timeout", TimeoutConfig, version="latest", force_refresh=True)
     client.close()
+
+
+def test_sdk_reports_anonymous_failure_payload(tmp_path, monkeypatch):
+    client = ConfigClient[TimeoutConfig](
+        base_url="http://config-service.local",
+        client_id="client-d",
+        target="checkout-service",
+        ttl_seconds=30,
+        cache_dir=tmp_path,
+    )
+    client._last_seen_payloads["checkout-service.timeout"] = {  # noqa: SLF001
+        "version": 2,
+        "source": "canary",
+    }
+
+    captured: dict = {}
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, json=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return DummyResponse()
+
+    monkeypatch.setattr(client._client, "post", fake_post)  # noqa: SLF001
+
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError as exc:
+        client.report_failure(
+            "checkout-service.timeout",
+            exc,
+            source="demo-client",
+            app_version="demo-client",
+            metadata={"safe_note": "kept", "stack_trace": "drop-me"},
+        )
+
+    assert captured["url"] == "/telemetry/failures"
+    assert captured["timeout"] == 2.0
+    assert captured["json"]["target"] == "checkout-service"
+    assert captured["json"]["config_version"] == 2
+    assert captured["json"]["config_source"] == "canary"
+    assert captured["json"]["anonymous_installation_id"]
+    assert captured["json"]["anonymous_installation_id"] != "client-d"
+    assert captured["json"]["metadata"]["safe_note"] == "kept"
+    assert "stack_trace" in captured["json"]["metadata"]
+    assert len(captured["json"]["fingerprint"]) == 32
+    client.close()

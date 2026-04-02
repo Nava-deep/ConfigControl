@@ -71,3 +71,21 @@ class AuditLog(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
     details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
+
+class ClientFailureEvent(Base):
+    __tablename__ = "client_failure_events"
+
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    config_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    target: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    error_type: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    anonymous_installation_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    config_version: Mapped[int | None] = mapped_column(Integer)
+    config_source: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")
+    sdk_version: Mapped[str | None] = mapped_column(String(40))
+    app_version: Mapped[str | None] = mapped_column(String(40))
+    runtime: Mapped[str | None] = mapped_column(String(40))
+    attributes: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)

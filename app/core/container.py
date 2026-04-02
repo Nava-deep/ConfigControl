@@ -10,6 +10,7 @@ from app.services.canary import CanaryMonitor
 from app.services.config_service import ConfigService
 from app.services.event_bridge import RedisEventBridge
 from app.services.notifications import NotificationHub
+from app.services.telemetry import TelemetryService
 
 
 @dataclass
@@ -19,6 +20,7 @@ class ServiceContainer:
     cache: CacheService
     notifications: NotificationHub
     config_service: ConfigService
+    telemetry_service: TelemetryService
     canary_monitor: CanaryMonitor
     event_bridge: RedisEventBridge
 
@@ -33,6 +35,10 @@ class ServiceContainer:
             database=database,
             cache=cache,
             notifications=notifications,
+        )
+        telemetry_service = TelemetryService(
+            settings=resolved_settings,
+            database=database,
         )
         event_bridge = RedisEventBridge(
             settings=resolved_settings,
@@ -51,6 +57,7 @@ class ServiceContainer:
             cache=cache,
             notifications=notifications,
             config_service=config_service,
+            telemetry_service=telemetry_service,
             canary_monitor=canary_monitor,
             event_bridge=event_bridge,
         )

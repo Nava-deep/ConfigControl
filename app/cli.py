@@ -50,6 +50,18 @@ def parse_args() -> argparse.Namespace:
     audit = subparsers.add_parser("audit", help="Read audit log")
     audit.add_argument("--name")
 
+    failures = subparsers.add_parser("failures", help="List recent anonymous client failure reports")
+    failures.add_argument("--name")
+    failures.add_argument("--target")
+    failures.add_argument("--source")
+    failures.add_argument("--limit", type=int, default=50)
+
+    failure_summary = subparsers.add_parser("failure-summary", help="Aggregate anonymous client failure reports")
+    failure_summary.add_argument("--name")
+    failure_summary.add_argument("--target")
+    failure_summary.add_argument("--window-minutes", type=int, default=60)
+    failure_summary.add_argument("--limit", type=int, default=20)
+
     dry = subparsers.add_parser("dry-run-migration", help="Validate a new schema against existing versions")
     dry.add_argument("--name", required=True)
     dry.add_argument("--schema-file", required=True, type=Path)
@@ -104,6 +116,26 @@ def main() -> None:
             response = client.post(f"/configs/{args.name}/rollouts/{args.rollout_id}/promote")
         elif args.command == "audit":
             response = client.get("/audit", params={"name": args.name})
+        elif args.command == "failures":
+            response = client.get(
+                "/telemetry/failures",
+                params={
+                    "config_name": args.name,
+                    "target": args.target,
+                    "source": args.source,
+                    "limit": args.limit,
+                },
+            )
+        elif args.command == "failure-summary":
+            response = client.get(
+                "/telemetry/failures/summary",
+                params={
+                    "config_name": args.name,
+                    "target": args.target,
+                    "window_minutes": args.window_minutes,
+                    "limit": args.limit,
+                },
+            )
         elif args.command == "dry-run-migration":
             response = client.post(
                 f"/configs/{args.name}/schema/dry-run",
