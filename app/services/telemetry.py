@@ -42,6 +42,7 @@ class TelemetryService:
         with self.database.session() as session:
             event = ClientFailureEvent(
                 config_name=payload.config_name,
+                environment=payload.environment,
                 target=payload.target,
                 source=payload.source,
                 error_type=payload.error_type,
@@ -57,7 +58,7 @@ class TelemetryService:
             session.add(event)
             session.commit()
             session.refresh(event)
-        CLIENT_FAILURE_REPORTS.labels(payload.target, payload.source).inc()
+        CLIENT_FAILURE_REPORTS.labels(payload.target, payload.source, payload.environment).inc()
         return FailureTelemetryResponse(
             event_id=event.event_id,
             ingested_at=event.occurred_at,
@@ -69,6 +70,7 @@ class TelemetryService:
         self,
         *,
         config_name: str | None = None,
+        environment: str | None = None,
         target: str | None = None,
         source: str | None = None,
         limit: int = 100,
@@ -77,6 +79,8 @@ class TelemetryService:
             stmt = select(ClientFailureEvent).order_by(desc(ClientFailureEvent.occurred_at)).limit(limit)
             if config_name:
                 stmt = stmt.where(ClientFailureEvent.config_name == config_name)
+            if environment:
+                stmt = stmt.where(ClientFailureEvent.environment == environment)
             if target:
                 stmt = stmt.where(ClientFailureEvent.target == target)
             if source:
@@ -86,6 +90,7 @@ class TelemetryService:
                 FailureTelemetryEventResponse(
                     event_id=event.event_id,
                     config_name=event.config_name,
+                    environment=event.environment,
                     target=event.target,
                     source=event.source,
                     error_type=event.error_type,
@@ -106,6 +111,7 @@ class TelemetryService:
         self,
         *,
         config_name: str | None = None,
+        environment: str | None = None,
         target: str | None = None,
         window_minutes: int = 60,
         limit: int = 50,
@@ -120,6 +126,7 @@ class TelemetryService:
             stmt = (
                 select(
                     ClientFailureEvent.config_name.label("config_name"),
+                    ClientFailureEvent.environment.label("environment"),
                     ClientFailureEvent.target.label("target"),
                     ClientFailureEvent.error_type.label("error_type"),
                     ClientFailureEvent.fingerprint.label("fingerprint"),
@@ -131,6 +138,7 @@ class TelemetryService:
                 .where(ClientFailureEvent.occurred_at >= since)
                 .group_by(
                     ClientFailureEvent.config_name,
+                    ClientFailureEvent.environment,
                     ClientFailureEvent.target,
                     ClientFailureEvent.error_type,
                     ClientFailureEvent.fingerprint,
@@ -140,12 +148,15 @@ class TelemetryService:
             )
             if config_name:
                 stmt = stmt.where(ClientFailureEvent.config_name == config_name)
+            if environment:
+                stmt = stmt.where(ClientFailureEvent.environment == environment)
             if target:
                 stmt = stmt.where(ClientFailureEvent.target == target)
             rows = session.execute(stmt).all()
         return [
             FailureTelemetrySummaryResponse(
                 config_name=row.config_name,
+                environment=row.environment,
                 target=row.target,
                 error_type=row.error_type,
                 fingerprint=row.fingerprint,

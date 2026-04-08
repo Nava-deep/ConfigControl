@@ -6,12 +6,14 @@ from fastapi import FastAPI
 
 from app.api.router import router
 from app.core.container import ServiceContainer
+from app.core.logging import configure_logging
 from app.core.metrics import metrics_middleware
 from app.core.settings import Settings, get_settings
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
+    configure_logging(resolved_settings.log_level)
     container = ServiceContainer.build(resolved_settings)
 
     @asynccontextmanager

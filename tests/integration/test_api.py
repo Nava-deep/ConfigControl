@@ -18,12 +18,21 @@ SCHEMA = {
 }
 
 
-def create_version(client, value: int, description: str | None = None):
+def create_version(
+    client,
+    value: int,
+    description: str | None = None,
+    *,
+    environment: str = "prod",
+    labels: dict[str, str] | None = None,
+):
     return client.post(
         "/configs",
         headers=ADMIN_HEADERS,
         json={
             "name": "checkout-service.timeout",
+            "environment": environment,
+            "labels": labels or {},
             "schema": SCHEMA,
             "value": {"timeout_ms": value},
             "description": description,
@@ -37,7 +46,12 @@ def find_client_with_source(client, source: str) -> str:
         response = client.get(
             "/configs/checkout-service.timeout",
             headers=READER_HEADERS,
-            params={"version": "resolved", "target": "checkout-service", "client_id": client_id},
+            params={
+                "version": "resolved",
+                "environment": "prod",
+                "target": "checkout-service",
+                "client_id": client_id,
+            },
         )
         if response.json()["source"] == source:
             return client_id
@@ -48,6 +62,7 @@ def test_create_resolve_and_version_history(client):
     first = create_version(client, 2000, "baseline")
     assert first.status_code == 201, first.text
     assert first.json()["activated"] is True
+    assert first.json()["environment"] == "prod"
 
     second = create_version(client, 3000, "candidate")
     assert second.status_code == 201, second.text
@@ -57,6 +72,7 @@ def test_create_resolve_and_version_history(client):
     assert resolved.status_code == 200
     assert resolved.json()["version"] == 1
     assert resolved.json()["source"] == "stable"
+    assert resolved.json()["environment"] == "prod"
 
     latest = client.get(
         "/configs/checkout-service.timeout",
@@ -86,7 +102,7 @@ def test_websocket_receives_rollout_event_and_canary_resolution(client):
     assert create_version(client, 2500).status_code == 201
 
     with client.websocket_connect(
-        "/watch/ws?config_name=checkout-service.timeout&target=checkout-service",
+        "/watch/ws?config_name=checkout-service.timeout&environment=prod&target=checkout-service",
         headers=READER_HEADERS,
     ) as websocket:
         connected = websocket.receive_json()
@@ -97,6 +113,7 @@ def test_websocket_receives_rollout_event_and_canary_resolution(client):
             headers=ADMIN_HEADERS,
             json={
                 "target": "checkout-service",
+                "environment": "prod",
                 "percent": 10,
                 "canary_check": {"metric": "error_rate", "threshold": 0.05, "window": 5},
             },
@@ -105,6 +122,7 @@ def test_websocket_receives_rollout_event_and_canary_resolution(client):
 
         event = websocket.receive_json()
         assert event["event"] == "rollout_started"
+        assert event["environment"] == "prod"
         assert event["version"] == 2
         assert event["rollout_percent"] == 10
 
@@ -114,12 +132,12 @@ def test_websocket_receives_rollout_event_and_canary_resolution(client):
     canary = client.get(
         "/configs/checkout-service.timeout",
         headers=READER_HEADERS,
-        params={"version": "resolved", "target": "checkout-service", "client_id": canary_client},
+        params={"version": "resolved", "environment": "prod", "target": "checkout-service", "client_id": canary_client},
     )
     stable = client.get(
         "/configs/checkout-service.timeout",
         headers=READER_HEADERS,
-        params={"version": "resolved", "target": "checkout-service", "client_id": stable_client},
+        params={"version": "resolved", "environment": "prod", "target": "checkout-service", "client_id": stable_client},
     )
     assert canary.json()["version"] == 2
     assert stable.json()["version"] == 1
@@ -134,6 +152,7 @@ def test_canary_metric_breach_triggers_auto_rollback(client):
         headers=ADMIN_HEADERS,
         json={
             "target": "checkout-service",
+            "environment": "prod",
             "percent": 20,
             "canary_check": {"metric": "error_rate", "threshold": 0.01, "window": 5},
         },
@@ -153,7 +172,7 @@ def test_canary_metric_breach_triggers_auto_rollback(client):
         resolved = client.get(
             "/configs/checkout-service.timeout",
             headers=READER_HEADERS,
-            params={"version": "resolved", "target": "checkout-service", "client_id": canary_client},
+            params={"version": "resolved", "environment": "prod", "target": "checkout-service", "client_id": canary_client},
         )
         if resolved.json()["version"] == 1 and resolved.json()["source"] == "stable":
             break
@@ -161,7 +180,11 @@ def test_canary_metric_breach_triggers_auto_rollback(client):
     else:
         raise AssertionError("rollout did not rollback within timeout")
 
-    audit = client.get("/audit", headers=ADMIN_HEADERS, params={"name": "checkout-service.timeout"})
+    audit = client.get(
+        "/audit",
+        headers=ADMIN_HEADERS,
+        params={"name": "checkout-service.timeout", "environment": "prod"},
+    )
     assert audit.status_code == 200
     assert any(item["action"] == "config.rollout.auto_rollback" for item in audit.json())
 
@@ -194,7 +217,7 @@ def test_resolved_get_does_not_create_assignment_rows(client):
     response = client.get(
         "/configs/checkout-service.timeout",
         headers=READER_HEADERS,
-        params={"version": "resolved", "target": "payments-service", "client_id": "reader-a"},
+        params={"version": "resolved", "environment": "prod", "target": "payments-service", "client_id": "reader-a"},
     )
     assert response.status_code == 200
     assert response.json()["version"] == 1
@@ -212,7 +235,7 @@ def test_partial_rollout_can_be_promoted_manually(client):
     rollout = client.post(
         "/configs/checkout-service.timeout/rollout",
         headers=ADMIN_HEADERS,
-        json={"target": "checkout-service", "percent": 10},
+        json={"target": "checkout-service", "environment": "prod", "percent": 10},
     )
     assert rollout.status_code == 200, rollout.text
     rollout_id = rollout.json()["rollout_id"]
@@ -227,7 +250,7 @@ def test_partial_rollout_can_be_promoted_manually(client):
     resolved = client.get(
         "/configs/checkout-service.timeout",
         headers=READER_HEADERS,
-        params={"version": "resolved", "target": "checkout-service", "client_id": "client-999"},
+        params={"version": "resolved", "environment": "prod", "target": "checkout-service", "client_id": "client-999"},
     )
     assert resolved.status_code == 200
     assert resolved.json()["version"] == 2
@@ -295,3 +318,221 @@ def test_anonymous_failure_telemetry_is_ingested_and_summarized(client):
     assert top["event_count"] == 1
     assert top["distinct_installations"] == 1
     assert top["latest_config_version"] == 1
+
+
+def test_environments_are_isolated_for_resolution_and_audit(client):
+    assert create_version(client, 2000, environment="prod", labels={"team": "checkout"}).status_code == 201
+    assert create_version(client, 9000, environment="staging", labels={"team": "checkout"}).status_code == 201
+
+    prod = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"environment": "prod"},
+    )
+    staging = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"environment": "staging"},
+    )
+
+    assert prod.status_code == 200
+    assert staging.status_code == 200
+    assert prod.json()["value"]["timeout_ms"] == 2000
+    assert staging.json()["value"]["timeout_ms"] == 9000
+    assert staging.json()["labels"] == {"team": "checkout"}
+
+    audit = client.get(
+        "/audit",
+        headers=ADMIN_HEADERS,
+        params={"name": "checkout-service.timeout", "environment": "staging"},
+    )
+    assert audit.status_code == 200
+    assert len(audit.json()) == 1
+    assert audit.json()[0]["environment"] == "staging"
+
+
+def test_diff_endpoint_returns_field_level_changes(client):
+    schema = {
+        "type": "object",
+        "properties": {
+            "timeout_ms": {"type": "integer", "minimum": 1},
+            "retry_budget": {"type": "integer", "minimum": 0},
+        },
+        "required": ["timeout_ms"],
+        "additionalProperties": False,
+    }
+    first = client.post(
+        "/configs",
+        headers=ADMIN_HEADERS,
+        json={
+            "name": "checkout-service.routing",
+            "environment": "prod",
+            "schema": schema,
+            "value": {"timeout_ms": 2000},
+        },
+    )
+    assert first.status_code == 201, first.text
+    second = client.post(
+        "/configs",
+        headers=ADMIN_HEADERS,
+        json={
+            "name": "checkout-service.routing",
+            "environment": "prod",
+            "value": {"timeout_ms": 2500, "retry_budget": 3},
+        },
+    )
+    assert second.status_code == 201, second.text
+
+    diff = client.get(
+        "/configs/checkout-service.routing/diff",
+        headers=READER_HEADERS,
+        params={"from_version": 1, "to_version": 2, "environment": "prod"},
+    )
+    assert diff.status_code == 200
+    assert diff.json()["environment"] == "prod"
+    assert {item["path"] for item in diff.json()["changes"]} == {"retry_budget", "timeout_ms"}
+
+
+def test_longpoll_returns_scoped_rollout_event(client):
+    assert create_version(client, 2000, environment="staging").status_code == 201
+    assert create_version(client, 3000, environment="staging").status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "staging", "percent": 10},
+    )
+    assert rollout.status_code == 200, rollout.text
+
+    event = client.get(
+        "/watch/longpoll",
+        headers=READER_HEADERS,
+        params={
+            "last_sequence": 1,
+            "config_name": "checkout-service.timeout",
+            "environment": "staging",
+            "target": "checkout-service",
+            "timeout": 0.1,
+        },
+    )
+    assert event.status_code == 200, event.text
+    assert event.json()["event"] == "rollout_started"
+    assert event.json()["environment"] == "staging"
+
+
+def test_hundred_percent_rollout_promotes_immediately(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 6000).status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 100},
+    )
+    assert rollout.status_code == 200, rollout.text
+    assert rollout.json()["status"] == "promoted"
+
+    resolved = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"environment": "prod", "target": "checkout-service", "client_id": "reader-a"},
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["version"] == 2
+    assert resolved.json()["source"] == "stable"
+
+
+def test_promote_non_active_rollout_returns_conflict(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 6000).status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 100},
+    )
+    assert rollout.status_code == 200, rollout.text
+
+    promote = client.post(
+        f"/configs/checkout-service.timeout/rollouts/{rollout.json()['rollout_id']}/promote",
+        headers=ADMIN_HEADERS,
+    )
+    assert promote.status_code == 409
+
+
+def test_reader_cannot_list_failure_telemetry(client):
+    list_response = client.get("/telemetry/failures", headers=READER_HEADERS)
+    summary_response = client.get("/telemetry/failures/summary", headers=READER_HEADERS)
+    assert list_response.status_code == 403
+    assert summary_response.status_code == 403
+
+
+def test_canary_resolution_is_deterministic_for_same_client(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 3500).status_code == 201
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 25},
+    )
+    assert rollout.status_code == 200, rollout.text
+
+    first = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"environment": "prod", "target": "checkout-service", "client_id": "deterministic-client"},
+    )
+    second = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"environment": "prod", "target": "checkout-service", "client_id": "deterministic-client"},
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["source"] == second.json()["source"]
+    assert first.json()["version"] == second.json()["version"]
+
+
+def test_failure_telemetry_is_filtered_by_environment(client):
+    assert create_version(client, 2000, environment="prod").status_code == 201
+    assert create_version(client, 2000, environment="staging").status_code == 201
+
+    for environment in ("prod", "staging"):
+        report = client.post(
+            "/telemetry/failures",
+            headers=READER_HEADERS,
+            json={
+                "config_name": "checkout-service.timeout",
+                "environment": environment,
+                "target": "checkout-service",
+                "source": "demo-client",
+                "error_type": "RuntimeError",
+                "fingerprint": f"{environment:0<32}"[:32],
+                "anonymous_installation_id": f"anon-{environment}-installation-1234567890",
+                "config_version": 1,
+                "config_source": "stable",
+                "sdk_version": "0.1.0",
+                "app_version": "demo-client",
+                "runtime": "python-3.14.3",
+                "metadata": {"safe_note": environment},
+            },
+        )
+        assert report.status_code == 202, report.text
+
+    prod_summary = client.get(
+        "/telemetry/failures/summary",
+        headers=ADMIN_HEADERS,
+        params={"config_name": "checkout-service.timeout", "environment": "prod", "window_minutes": 60},
+    )
+    staging_summary = client.get(
+        "/telemetry/failures/summary",
+        headers=ADMIN_HEADERS,
+        params={"config_name": "checkout-service.timeout", "environment": "staging", "window_minutes": 60},
+    )
+
+    assert prod_summary.status_code == 200
+    assert staging_summary.status_code == 200
+    assert len(prod_summary.json()) == 1
+    assert len(staging_summary.json()) == 1
+    assert prod_summary.json()[0]["environment"] == "prod"
+    assert staging_summary.json()[0]["environment"] == "staging"

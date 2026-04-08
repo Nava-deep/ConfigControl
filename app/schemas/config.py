@@ -6,6 +6,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+EnvironmentName = Literal["dev", "staging", "prod"]
+
+
 class CanaryCheck(BaseModel):
     metric: str
     threshold: float = Field(gt=0)
@@ -16,6 +19,8 @@ class ConfigCreateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str
+    environment: EnvironmentName = "prod"
+    labels: dict[str, str] = Field(default_factory=dict)
     schema_: dict[str, Any] | None = Field(default=None, alias="schema")
     value: dict[str, Any]
     description: str | None = None
@@ -24,7 +29,9 @@ class ConfigCreateRequest(BaseModel):
 class ConfigVersionResponse(BaseModel):
     config_id: str
     name: str
+    environment: EnvironmentName
     version: int
+    labels: dict[str, str]
     description: str | None
     created_by: str
     created_at: datetime
@@ -35,6 +42,7 @@ class ConfigVersionResponse(BaseModel):
 
 class ConfigSummary(BaseModel):
     name: str
+    environment: EnvironmentName
     latest_version: int
     stable_target: str
     stable_version: int
@@ -45,10 +53,12 @@ class ConfigReadResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str
+    environment: EnvironmentName
     version: int
     target: str
     source: Literal["explicit", "latest", "stable", "canary"]
     description: str | None
+    labels: dict[str, str]
     value: dict[str, Any]
     schema_: dict[str, Any] = Field(alias="schema")
     created_at: datetime
@@ -56,6 +66,7 @@ class ConfigReadResponse(BaseModel):
 
 class RolloutRequest(BaseModel):
     target: str
+    environment: EnvironmentName = "prod"
     percent: int = Field(ge=1, le=100)
     canary_check: CanaryCheck | None = None
 
@@ -63,6 +74,7 @@ class RolloutRequest(BaseModel):
 class RolloutResponse(BaseModel):
     rollout_id: str
     config_name: str
+    environment: EnvironmentName
     target: str
     from_version: int
     to_version: int
@@ -75,12 +87,15 @@ class RolloutResponse(BaseModel):
 class RollbackRequest(BaseModel):
     target_version: int = Field(ge=1)
     target: str | None = None
+    environment: EnvironmentName = "prod"
 
 
 class VersionHistoryEntry(BaseModel):
+    environment: EnvironmentName
     version: int
     created_at: datetime
     created_by: str
+    labels: dict[str, str]
     description: str | None
     is_latest: bool
 
@@ -88,12 +103,14 @@ class VersionHistoryEntry(BaseModel):
 class DryRunMigrationRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    environment: EnvironmentName = "prod"
     schema_: dict[str, Any] = Field(alias="schema")
     value: dict[str, Any] | None = None
 
 
 class DryRunMigrationResponse(BaseModel):
     config_name: str
+    environment: EnvironmentName
     candidate_value_valid: bool
     current_versions_checked: int
     compatible_versions: list[int]
@@ -105,6 +122,7 @@ class NotificationEvent(BaseModel):
     sequence: int
     event: str
     config_name: str
+    environment: EnvironmentName
     target: str
     version: int
     stable_version: int
@@ -125,3 +143,18 @@ class SimulationMetricResponse(BaseModel):
     metric: str
     value: float
     timestamp: datetime
+
+
+class ConfigDiffEntry(BaseModel):
+    path: str
+    change_type: Literal["added", "removed", "changed"]
+    before: Any | None = None
+    after: Any | None = None
+
+
+class ConfigDiffResponse(BaseModel):
+    config_name: str
+    environment: EnvironmentName
+    from_version: int
+    to_version: int
+    changes: list[ConfigDiffEntry]

@@ -28,6 +28,7 @@ class ConfigClient(Generic[ModelT]):
         base_url: str,
         client_id: str,
         target: str,
+        environment: str = "prod",
         ttl_seconds: int = 30,
         cache_dir: Path | None = None,
         user_id: str = "sdk-client",
@@ -37,6 +38,7 @@ class ConfigClient(Generic[ModelT]):
         self.base_url = base_url.rstrip("/")
         self.client_id = client_id
         self.target = target
+        self.environment = environment
         self.ttl_seconds = ttl_seconds
         self.cache_dir = cache_dir or Path(".cache/config-sdk")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -61,7 +63,12 @@ class ConfigClient(Generic[ModelT]):
         try:
             response = self._client.get(
                 f"/configs/{name}",
-                params={"version": version, "target": self.target, "client_id": self.client_id},
+                params={
+                    "version": version,
+                    "target": self.target,
+                    "client_id": self.client_id,
+                    "environment": self.environment,
+                },
             )
             response.raise_for_status()
             payload = response.json()
@@ -93,7 +100,7 @@ class ConfigClient(Generic[ModelT]):
                         event = json.loads(message)
                         if event.get("event") == "connected":
                             continue
-                        config = self.get_typed(name, model, force_refresh=True)
+                        config = await asyncio.to_thread(self.get_typed, name, model, version="resolved", force_refresh=True)
                         outcome = callback(config, event)
                         if inspect.isawaitable(outcome):
                             await outcome
@@ -114,6 +121,7 @@ class ConfigClient(Generic[ModelT]):
         context = self._last_seen_payloads.get(name, {})
         payload = {
             "config_name": name,
+            "environment": self.environment,
             "target": self.target,
             "source": source,
             "error_type": type(error).__name__,
@@ -136,7 +144,8 @@ class ConfigClient(Generic[ModelT]):
     def _cache_path(self, name: str, version: str) -> Path:
         safe_name = name.replace("/", "_").replace(".", "_")
         safe_version = str(version).replace("/", "_").replace(".", "_")
-        return self.cache_dir / f"{safe_name}_{safe_version}_{self.target}_{self.client_id}.json"
+        safe_environment = self.environment.replace("/", "_").replace(".", "_")
+        return self.cache_dir / f"{safe_name}_{safe_environment}_{safe_version}_{self.target}_{self.client_id}.json"
 
     def _save_cache(self, name: str, version: str, payload: dict[str, Any]) -> None:
         record = {"saved_at": time.time(), "payload": payload}
@@ -182,5 +191,5 @@ class ConfigClient(Generic[ModelT]):
     def _build_ws_url(self, name: str) -> str:
         parsed = urlparse(self.base_url)
         scheme = "wss" if parsed.scheme == "https" else "ws"
-        query = urlencode({"config_name": name, "target": self.target})
+        query = urlencode({"config_name": name, "environment": self.environment, "target": self.target})
         return urlunparse((scheme, parsed.netloc, "/watch/ws", "", query, ""))

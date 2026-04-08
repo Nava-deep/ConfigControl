@@ -6,6 +6,7 @@
 - Clients keep using their on-disk last-known-good cache through the Python SDK.
 - The API falls back to an in-memory cache for local notifications and simulated metrics.
 - What degrades: cross-instance pubsub fanout and warm-cache hits.
+- Prometheus exposes cache fallback counters so operators can see the degradation instead of guessing.
 
 ## Postgres outage
 
@@ -20,6 +21,7 @@
 - Websocket watch reconnects with backoff.
 - Anonymous failure telemetry becomes best-effort only; failure reports are dropped rather than blocking the app.
 - Once connectivity returns, the client re-fetches the resolved config and converges without a restart.
+- Environment scoping in the SDK cache prevents `staging` values from being reused in `prod`.
 
 ## Canary regression
 

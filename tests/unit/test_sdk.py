@@ -99,6 +99,7 @@ def test_sdk_reports_anonymous_failure_payload(tmp_path, monkeypatch):
         base_url="http://config-service.local",
         client_id="client-d",
         target="checkout-service",
+        environment="staging",
         ttl_seconds=30,
         cache_dir=tmp_path,
     )
@@ -135,6 +136,7 @@ def test_sdk_reports_anonymous_failure_payload(tmp_path, monkeypatch):
     assert captured["url"] == "/telemetry/failures"
     assert captured["timeout"] == 2.0
     assert captured["json"]["target"] == "checkout-service"
+    assert captured["json"]["environment"] == "staging"
     assert captured["json"]["config_version"] == 2
     assert captured["json"]["config_source"] == "canary"
     assert captured["json"]["anonymous_installation_id"]
@@ -142,4 +144,43 @@ def test_sdk_reports_anonymous_failure_payload(tmp_path, monkeypatch):
     assert captured["json"]["metadata"]["safe_note"] == "kept"
     assert "stack_trace" in captured["json"]["metadata"]
     assert len(captured["json"]["fingerprint"]) == 32
+    client.close()
+
+
+def test_sdk_cache_is_scoped_by_environment(tmp_path):
+    prod = ConfigClient[TimeoutConfig](
+        base_url="http://config-service.local",
+        client_id="client-e",
+        target="checkout-service",
+        environment="prod",
+        cache_dir=tmp_path,
+    )
+    staging = ConfigClient[TimeoutConfig](
+        base_url="http://config-service.local",
+        client_id="client-e",
+        target="checkout-service",
+        environment="staging",
+        cache_dir=tmp_path,
+    )
+
+    assert prod._cache_path("checkout-service.timeout", "resolved") != staging._cache_path(  # noqa: SLF001
+        "checkout-service.timeout",
+        "resolved",
+    )
+    prod.close()
+    staging.close()
+
+
+def test_sdk_websocket_url_includes_environment(tmp_path):
+    client = ConfigClient[TimeoutConfig](
+        base_url="http://config-service.local",
+        client_id="client-f",
+        target="checkout-service",
+        environment="staging",
+        cache_dir=tmp_path,
+    )
+
+    url = client._build_ws_url("checkout-service.timeout")  # noqa: SLF001
+    assert "environment=staging" in url
+    assert "config_name=checkout-service.timeout" in url
     client.close()

@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+from app.core.metrics import ROLLOUT_EVALUATIONS
 from app.db.models import Rollout
 from app.db.session import Database
 from app.services.cache import CacheService
@@ -60,6 +61,22 @@ class CanaryMonitor:
             if rollout.canary_metric and rollout.canary_threshold is not None:
                 current = self.config_service.get_metric_value(rollout.target, rollout.canary_metric)
                 if current is not None and current > rollout.canary_threshold:
+                    ROLLOUT_EVALUATIONS.labels("threshold_breach", rollout.environment).inc()
+                    logger.warning(
+                        "rollout canary threshold breached",
+                        extra={
+                            "event": "rollout.canary_breach",
+                            "context": {
+                                "config_name": rollout.config_name,
+                                "environment": rollout.environment,
+                                "target": rollout.target,
+                                "rollout_id": rollout.rollout_id,
+                                "metric": rollout.canary_metric,
+                                "threshold": rollout.canary_threshold,
+                                "value": current,
+                            },
+                        },
+                    )
                     await self.config_service.auto_rollback_rollout(
                         rollout.rollout_id,
                         reason=(
@@ -68,7 +85,26 @@ class CanaryMonitor:
                         ),
                     )
                     continue
+                if current is None:
+                    ROLLOUT_EVALUATIONS.labels("no_signal", rollout.environment).inc()
+                else:
+                    ROLLOUT_EVALUATIONS.labels("healthy_signal", rollout.environment).inc()
             if rollout.canary_window_minutes is not None:
                 deadline = created_at + timedelta(minutes=rollout.canary_window_minutes)
                 if now >= deadline:
+                    ROLLOUT_EVALUATIONS.labels("auto_promote", rollout.environment).inc()
+                    logger.info(
+                        "rollout canary window elapsed",
+                        extra={
+                            "event": "rollout.auto_promote",
+                            "context": {
+                                "config_name": rollout.config_name,
+                                "environment": rollout.environment,
+                                "target": rollout.target,
+                                "rollout_id": rollout.rollout_id,
+                            },
+                        },
+                    )
                     await self.config_service.promote_rollout(rollout.rollout_id)
+                    continue
+            ROLLOUT_EVALUATIONS.labels("evaluated", rollout.environment).inc()

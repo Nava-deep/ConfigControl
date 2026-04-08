@@ -10,11 +10,11 @@ Each `POST /configs` call creates a new version so rollbacks are constant-time p
 
 ## Stable pointer + active rollout
 
-Instead of marking versions globally active, the service stores a stable pointer per `(config_name, target)` and optionally overlays an active rollout. That makes canary resolution deterministic and keeps rollback logic simple.
+Instead of marking versions globally active, the service stores a stable pointer per `(config_name, environment, target)` and optionally overlays an active rollout. That makes canary resolution deterministic, prevents `staging` and `prod` from bleeding into each other, and keeps rollback logic simple.
 
 ## Deterministic client bucketing
 
-Canary routing hashes `(config_name, target, client_id)` into a 0-99 bucket. The same client lands in the same cohort every time, which is critical for reproducible debugging.
+Canary routing hashes `(config_name, environment, target, client_id)` into a 0-99 bucket. The same client lands in the same cohort every time, which is critical for reproducible debugging.
 
 ## Redis as an optimization, not a hard dependency
 
@@ -23,3 +23,7 @@ Redis accelerates cache reads and event fanout, but the control plane continues 
 ## SQLite-compatible tests, Postgres runtime
 
 The service is designed for Postgres in Compose/Kubernetes, but tests use SQLite so CI stays fast and deterministic. That tradeoff keeps the repo lightweight while still proving the core rollout semantics.
+
+## Environment-aware telemetry
+
+Failure telemetry is tagged with the config environment. Without that dimension, the same config key in `staging` and `prod` would collapse into the same incident view, which is misleading during rollout triage.

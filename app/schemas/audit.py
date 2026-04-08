@@ -10,6 +10,7 @@ class AuditEntryResponse(BaseModel):
     user_id: str
     action: str
     config_name: str
+    environment: str
     version: int | None
     timestamp: datetime
     details: dict

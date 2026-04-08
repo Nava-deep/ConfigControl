@@ -11,6 +11,7 @@ ConfigSource = Literal["explicit", "latest", "stable", "canary", "unknown"]
 
 class FailureTelemetryRequest(BaseModel):
     config_name: str
+    environment: str = "prod"
     target: str
     source: str = Field(min_length=1, max_length=80)
     error_type: str = Field(min_length=1, max_length=120)
@@ -34,6 +35,7 @@ class FailureTelemetryResponse(BaseModel):
 class FailureTelemetryEventResponse(BaseModel):
     event_id: str
     config_name: str
+    environment: str
     target: str
     source: str
     error_type: str
@@ -50,6 +52,7 @@ class FailureTelemetryEventResponse(BaseModel):
 
 class FailureTelemetrySummaryResponse(BaseModel):
     config_name: str
+    environment: str
     target: str
     error_type: str
     fingerprint: str

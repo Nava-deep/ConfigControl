@@ -13,6 +13,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-url", default="http://localhost:8080")
     parser.add_argument("--user", default="cli-operator")
     parser.add_argument("--role", default="operator")
+    parser.add_argument("--environment", default="prod", choices=["dev", "staging", "prod"])
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     push = subparsers.add_parser("push", help="Create a new immutable config version")
@@ -20,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     push.add_argument("--value-file", required=True, type=Path)
     push.add_argument("--schema-file", type=Path)
     push.add_argument("--description")
+    push.add_argument("--label", action="append", default=[], help="Label in key=value form. Repeatable.")
 
     get = subparsers.add_parser("get", help="Fetch config")
     get.add_argument("--name", required=True)
@@ -29,6 +31,11 @@ def parse_args() -> argparse.Namespace:
 
     versions = subparsers.add_parser("versions", help="List version history")
     versions.add_argument("--name", required=True)
+
+    diff = subparsers.add_parser("diff", help="Show a field-level diff between two config versions")
+    diff.add_argument("--name", required=True)
+    diff.add_argument("--from-version", required=True, type=int)
+    diff.add_argument("--to-version", required=True, type=int)
 
     rollout = subparsers.add_parser("rollout", help="Start canary or 100% rollout")
     rollout.add_argument("--name", required=True)
@@ -80,6 +87,16 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def parse_labels(values: list[str]) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for item in values:
+        if "=" not in item:
+            raise SystemExit(f"invalid label '{item}', expected key=value")
+        key, value = item.split("=", 1)
+        labels[key] = value
+    return labels
+
+
 def main() -> None:
     args = parse_args()
     headers = {"X-User-Id": args.user, "X-Role": args.role}
@@ -87,6 +104,8 @@ def main() -> None:
         if args.command == "push":
             payload = {
                 "name": args.name,
+                "environment": args.environment,
+                "labels": parse_labels(args.label),
                 "value": load_json(args.value_file),
                 "schema": load_json(args.schema_file) if args.schema_file else None,
                 "description": args.description,
@@ -95,32 +114,56 @@ def main() -> None:
         elif args.command == "get":
             response = client.get(
                 f"/configs/{args.name}",
-                params={"version": args.version, "target": args.target, "client_id": args.client_id},
+                params={
+                    "version": args.version,
+                    "target": args.target,
+                    "client_id": args.client_id,
+                    "environment": args.environment,
+                },
             )
         elif args.command == "versions":
-            response = client.get(f"/configs/{args.name}/versions")
+            response = client.get(f"/configs/{args.name}/versions", params={"environment": args.environment})
+        elif args.command == "diff":
+            response = client.get(
+                f"/configs/{args.name}/diff",
+                params={
+                    "from_version": args.from_version,
+                    "to_version": args.to_version,
+                    "environment": args.environment,
+                },
+            )
         elif args.command == "rollout":
             canary = None
             if args.metric and args.threshold is not None:
                 canary = {"metric": args.metric, "threshold": args.threshold, "window": args.window}
             response = client.post(
                 f"/configs/{args.name}/rollout",
-                json={"target": args.target, "percent": args.percent, "canary_check": canary},
+                json={
+                    "target": args.target,
+                    "environment": args.environment,
+                    "percent": args.percent,
+                    "canary_check": canary,
+                },
             )
         elif args.command == "rollback":
             response = client.post(
                 f"/configs/{args.name}/rollback",
-                json={"target_version": args.target_version, "target": args.target},
+                json={
+                    "target_version": args.target_version,
+                    "target": args.target,
+                    "environment": args.environment,
+                },
             )
         elif args.command == "promote":
             response = client.post(f"/configs/{args.name}/rollouts/{args.rollout_id}/promote")
         elif args.command == "audit":
-            response = client.get("/audit", params={"name": args.name})
+            response = client.get("/audit", params={"name": args.name, "environment": args.environment})
         elif args.command == "failures":
             response = client.get(
                 "/telemetry/failures",
                 params={
                     "config_name": args.name,
+                    "environment": args.environment,
                     "target": args.target,
                     "source": args.source,
                     "limit": args.limit,
@@ -131,6 +174,7 @@ def main() -> None:
                 "/telemetry/failures/summary",
                 params={
                     "config_name": args.name,
+                    "environment": args.environment,
                     "target": args.target,
                     "window_minutes": args.window_minutes,
                     "limit": args.limit,
@@ -140,6 +184,7 @@ def main() -> None:
             response = client.post(
                 f"/configs/{args.name}/schema/dry-run",
                 json={
+                    "environment": args.environment,
                     "schema": load_json(args.schema_file),
                     "value": load_json(args.value_file) if args.value_file else None,
                 },
@@ -150,7 +195,7 @@ def main() -> None:
                 json={"target": args.target, "metric": args.metric, "value": args.value},
             )
         else:
-            response = client.get("/configs")
+            response = client.get("/configs", params={"environment": args.environment})
 
     try:
         response.raise_for_status()
