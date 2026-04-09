@@ -46,6 +46,7 @@ class BenchmarkSummary:
     p95_ms: float
     minimum_ms: float
     maximum_ms: float
+    throughput_rps: float | None
     notes: str
 
 
@@ -62,7 +63,13 @@ def percentile(samples: list[float], value: float) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * weight
 
 
-def summarize(name: str, samples: list[float], notes: str, failures: int = 0) -> BenchmarkSummary:
+def summarize(
+    name: str,
+    samples: list[float],
+    notes: str,
+    failures: int = 0,
+    throughput_rps: float | None = None,
+) -> BenchmarkSummary:
     if not samples:
         raise RuntimeError(f"benchmark '{name}' produced no samples")
     return BenchmarkSummary(
@@ -73,6 +80,7 @@ def summarize(name: str, samples: list[float], notes: str, failures: int = 0) ->
         p95_ms=percentile(samples, 0.95),
         minimum_ms=min(samples),
         maximum_ms=max(samples),
+        throughput_rps=throughput_rps,
         notes=notes,
     )
 
@@ -230,6 +238,12 @@ def metric_delta(
             }
         )
     return rows
+
+
+def format_optional(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.2f}"
 
 
 async def benchmark_publish_latency(client: httpx.AsyncClient, iterations: int) -> BenchmarkSummary:
@@ -507,10 +521,8 @@ async def benchmark_concurrent_fetch_load(
     return summarize(
         "concurrent_fetch_latency_ms",
         samples,
-        notes=(
-            "Measures resolved fetch latency under concurrent synthetic load. "
-            f"Throughput during this run: {throughput:.2f} requests/second across {concurrency} workers."
-        ),
+        notes="Measures resolved fetch latency under concurrent synthetic load.",
+        throughput_rps=throughput,
     )
 
 
@@ -555,7 +567,10 @@ def build_report(
             "delivery_iterations": delivery_iterations,
             "concurrency": concurrency,
             "requests_per_worker": requests_per_worker,
+            "concurrent_request_count": concurrency * requests_per_worker,
         },
+        "benchmark_count": len(benchmarks),
+        "error_count": sum(item.failures for item in benchmarks),
         "benchmarks": [asdict(item) for item in benchmarks],
         "metrics_delta": metrics_delta_report,
     }
@@ -574,7 +589,9 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]
     latest_json.write_text(json_text, encoding="utf-8")
 
     rows = "\n".join(
-        f"| {item['name']} | {item['count']} | {item['average_ms']:.2f} | {item['p95_ms']:.2f} | {item['failures']} | {item['notes']} |"
+        f"| {item['name']} | {item['count']} | "
+        f"{format_optional(item['throughput_rps'])} | "
+        f"{item['average_ms']:.2f} | {item['p95_ms']:.2f} | {item['failures']} | {item['notes']} |"
         for item in report["benchmarks"]
     )
     metrics_rows: list[str] = []
@@ -602,11 +619,14 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]
             f"- Delivery iterations: `{report['parameters']['delivery_iterations']}`",
             f"- Concurrency: `{report['parameters']['concurrency']}`",
             f"- Requests per worker: `{report['parameters']['requests_per_worker']}`",
+            f"- Concurrent request count: `{report['parameters']['concurrent_request_count']}`",
+            f"- Benchmark count: `{report['benchmark_count']}`",
+            f"- Error count: `{report['error_count']}`",
             "",
             "## Benchmark Summary",
             "",
-            "| Benchmark | Samples | Average (ms) | p95 (ms) | Failures | Notes |",
-            "| --- | ---: | ---: | ---: | ---: | --- |",
+            "| Benchmark | Samples | Throughput (req/s) | Average (ms) | p95 (ms) | Failures | Notes |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
             rows,
             "",
             "## Metrics Delta",

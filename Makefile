@@ -1,7 +1,7 @@
 PYTHON ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 
-.PHONY: install run test test-unit test-integration verify bench bench-quick demo-client seed-demo docker-up docker-down
+.PHONY: install run test test-unit test-integration test-failure verify bench bench-quick failure-report demo-client seed-demo docker-up docker-down
 
 install:
 	python3 -m venv .venv
@@ -20,6 +20,9 @@ test-unit:
 test-integration:
 	$(PYTHON) -m pytest -q tests/integration
 
+test-failure:
+	$(PYTHON) -m pytest -q tests/integration/test_failure_modes.py tests/unit/test_cache.py
+
 verify:
 	$(PYTHON) -m compileall app tests perf
 	$(PYTHON) -m pytest -q
@@ -29,6 +32,9 @@ bench:
 
 bench-quick:
 	$(PYTHON) perf/run_benchmarks.py --iterations 10 --delivery-iterations 4 --concurrency 8 --requests-per-worker 5
+
+failure-report:
+	$(PYTHON) perf/run_failure_scenarios.py --delay-seconds 0.05
 
 demo-client:
 	$(PYTHON) -m app.demo_client --base-url http://localhost:8080

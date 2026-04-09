@@ -1,43 +1,45 @@
 # Config Control Plane
 
-Centralized configuration management service with versioning, canary rollouts, and real-time delivery.
+Centralized configuration management service with immutable versioning, canary rollouts, rollback safety, and real-time delivery.
 
-## What Problem Does This Solve?
+## At a Glance
 
-Managing application configuration is harder than it looks.
-
-Common problems:
-- Different services or environments drift out of sync
-- A bad config change can break production instantly
-- Teams often lack safe rollout and rollback tools
-- Config changes are hard to audit and debug later
-
-This project solves that by providing:
-- A central place to store and read config
-- Immutable versions so old values are never lost
-- Safe canary rollouts from `1%` to `100%`
-- Rollback to a known-good version
-- Real-time delivery so clients can update without restart
-- Audit logs to see who changed what and when
-
-## Key Features
-
-- Immutable versioning: every config change creates a new version
-- Environment-aware configs: supports `dev`, `staging`, and `prod`
-- Canary rollouts: gradual rollout from `1%` to `100%`
-- Promote and rollback flows
+This project demonstrates:
+- immutable config version history
+- target-based config resolution
+- deterministic `1%` to `100%` canary rollouts
+- promote and rollback workflows
 - JSON Schema validation before publish
-- Dry-run schema validation for migration safety
-- RBAC with `admin`, `operator`, and `reader` roles
-- Audit logs for all config mutations
-- Real-time updates through WebSocket and long-poll
-- Redis fanout across instances with in-memory fallback
-- Typed Python SDK with TTL cache and last-known-good fallback
-- Operator CLI for push, get, diff, rollout, rollback, and audit
-- Anonymous client failure telemetry with summaries
-- Prometheus metrics and health endpoints
+- RBAC and audit logs
+- WebSocket and long-poll hot reload
+- Redis fanout with in-memory fallback
+- Prometheus instrumentation
+- synthetic benchmark tooling
+- failure-scenario validation
 
-## System Architecture
+Proof included in the repository:
+- `43` automated tests
+- `9` synthetic benchmark measurements
+- `6` reproducible failure scenarios
+- JSON and Markdown reports for local benchmark and failure runs
+
+## Why It Matters
+
+Configuration changes can be as risky as code deploys. Production systems need a safe way to change runtime behavior without redeploying services, limit blast radius during rollout, recover quickly from bad changes, and keep applications functioning when supporting infrastructure degrades.
+
+This project models that problem as a backend control plane rather than a simple CRUD API.
+
+## Core Capabilities
+
+- Immutable versioning with environment-aware config history
+- Target-based resolution by service target and client identity
+- Deterministic canary rollout logic with promotion and rollback
+- Real-time updates over WebSocket and long-poll
+- Redis fanout with local in-memory fallback
+- RBAC, audit logs, health checks, and Prometheus metrics
+- Python SDK and operator CLI for realistic control-plane usage
+
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -54,276 +56,143 @@ flowchart LR
     Watch --> Client
 ```
 
-What each component does:
-- `FastAPI API`: accepts config writes, reads, rollouts, rollback, audit, and telemetry requests
-- `PostgreSQL`: source of truth for versions, assignments, rollouts, audit logs, and telemetry
-- `Redis`: speeds up fanout and caching; also stores synthetic rollout metrics
-- `WebSocket / Long-poll`: pushes config changes to connected clients
-- `Canary Monitor`: watches rollout health and promotes or rolls back
-- `CLI / SDK`: operator and client interfaces for using the control plane
+Component roles:
+- `FastAPI API`: config CRUD, rollout, rollback, audit, telemetry, health, and metrics endpoints
+- `PostgreSQL`: source of truth for config versions, assignments, rollout state, and audit logs
+- `Redis`: fanout and cache acceleration when available
+- `Notification hub`: in-process WebSocket and long-poll delivery path
+- `Canary monitor`: evaluates synthetic rollout health and triggers promotion or rollback
+- `CLI / SDK`: operator workflow and application-side config consumption
 
-## How It Works
+## Design Focus
 
-### 1. Create a config
-- An operator sends `POST /configs`
-- The request includes a config name, environment, schema, and value
+The main design focus is:
+- safe runtime change management through immutable versions
+- rollout blast-radius control with deterministic canary targeting
+- degradation handling when Redis is unavailable or slow
+- real-time client update delivery over WebSocket and long-poll
+- auditability and rollback correctness
+- measurable validation through tests, benchmarks, and failure reports
 
-### 2. Validate it
-- The service checks the JSON Schema
-- It validates the config value against that schema
-- If invalid, the write is rejected
+## Reliability Features
 
-### 3. Store it as a new version
-- A new immutable version is created
-- Older versions remain available for history and rollback
+- Immutable versions: every publish creates a new version; old versions are never overwritten
+- Environment-aware resolution: supports `dev`, `staging`, and `prod`
+- Target-based resolution: configs resolve by service target and client identity
+- Canary rollout engine: partial rollout, deterministic bucketing, promote, and rollback
+- Validation gates: JSON Schema validation on publish and dry-run schema checks
+- RBAC: `admin`, `operator`, and `reader`
+- Audit logs: records config mutation history
+- Delivery redundancy: Redis fanout when healthy, local in-memory delivery when degraded
+- Client safety: SDK cache and last-known-good fallback
 
-### 4. Start a rollout
-- The operator can roll out the latest version to a target service
-- Clients are deterministically split into stable or canary groups
+## Validation Artifacts
 
-### 5. Deliver updates to clients
-- Clients fetch config through the API or SDK
-- Connected clients can receive updates through WebSocket or long-poll
-- If the rollout metric degrades, the system rolls back
+Correctness coverage validates:
+- immutable versioning
+- target-based resolution
+- canary rollout correctness
+- promote and rollback flows
+- RBAC and audit log behavior
+- Redis fallback and fanout behavior
+- WebSocket and long-poll delivery semantics
 
-## Tech Stack
+Synthetic benchmark coverage measures:
+- fetch throughput
+- average and p95 fetch latency
+- publish latency
+- rollback latency
+- WebSocket propagation latency
+- long-poll propagation and timeout behavior
+- concurrent synthetic request performance
 
-- Backend API: FastAPI
-- Database: PostgreSQL
-- Cache / Fanout: Redis
-- ORM: SQLAlchemy
-- Validation: `jsonschema`
-- Client delivery: WebSockets + long-poll
-- SDK / CLI: Python
-- Metrics: Prometheus
-- Local orchestration: Docker Compose
-- Deployment examples: Kubernetes manifests
-- Testing: Pytest
-- Benchmarking: custom local perf harness
+Failure-scenario validation covers:
+- Redis unavailable at startup
+- invalid schema publish rejection
+- WebSocket delivery during Redis publish failure
+- long-poll delivery during Redis publish failure
+- rollback correctness during Redis publish failure
+- delayed Redis read fallback behavior
 
-## Getting Started
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/Nava-deep/ConfigControl.git
-cd ConfigControl
-```
-
-### 2. Create local environment file
-
-```bash
-cp .env.example .env
-```
-
-### 3. Start the full stack
-
-```bash
-docker compose up --build
-```
-
-This starts:
-- API on `http://localhost:8080`
-- Swagger docs on `http://localhost:8080/docs`
-- Prometheus on `http://localhost:9090`
-- PostgreSQL
-- Redis
-
-### 4. Optional: local Python workflow
+## Verification
 
 ```bash
 make install
-make test
-make run
-```
-
-### 5. Seed demo data
-
-```bash
-make seed-demo
-```
-
-### 6. Run tests
-
-```bash
-make test
-make test-unit
-make test-integration
 make verify
-```
-
-### 7. Run benchmarks
-
-Quick local benchmark run:
-
-```bash
 make bench-quick
-```
-
-Longer benchmark run for more stable numbers:
-
-```bash
 make bench
+make test-failure
+make failure-report
 ```
 
-The benchmark harness:
-- starts the API locally with a temporary SQLite database
-- disables Redis so the run is reproducible on a single machine
-- measures publish, fetch, rollback, WebSocket delivery, long-poll delivery, long-poll timeout behavior, and small concurrent fetch load
-- writes machine-readable and copy-paste-friendly reports to:
-  - `perf/results/latest_results.json`
-  - `perf/results/latest_report.md`
+## Report Outputs
 
-Resume-safe rule:
-- only use numbers that you measured yourself with the included benchmark commands
-- record the command, machine, and date alongside the result
+Synthetic benchmark artifacts:
+- `perf/results/latest_results.json`
+- `perf/results/latest_report.md`
 
-## Example Usage
+Failure-scenario artifacts:
+- `perf/results/latest_failure_results.json`
+- `perf/results/latest_failure_report.md`
 
-### Create a config
+These files capture locally measured synthetic benchmark and failure-scenario outputs.
 
-```bash
-curl -X POST http://localhost:8080/configs \
-  -H "Content-Type: application/json" \
-  -H "X-User-Id: alice" \
-  -H "X-Role: admin" \
-  -d '{
-    "name": "checkout-service.timeout",
-    "environment": "prod",
-    "labels": {"team": "checkout"},
-    "schema": {
-      "type": "object",
-      "properties": {
-        "timeout_ms": {"type": "integer", "minimum": 1}
-      },
-      "required": ["timeout_ms"],
-      "additionalProperties": false
-    },
-    "value": {"timeout_ms": 2000},
-    "description": "baseline timeout"
-  }'
-```
+## Benchmark Output Fields
 
-### Read the resolved config
+- `publish_latency_ms`: time to create a new immutable version
+- `resolved_fetch_latency_ms`: latency for normal target-based config reads
+- `uncached_fetch_latency_ms`: explicit version fetch with cache cleared
+- `cached_fetch_latency_ms`: explicit version fetch after cache warm-up
+- `rollback_latency_ms`: rollback execution latency
+- `websocket_delivery_latency_ms`: time from event publish to websocket receipt
+- `longpoll_delivery_latency_ms`: time from event publish to long-poll response
+- `longpoll_timeout_duration_ms`: how closely idle long-poll requests match the configured timeout
+- `concurrent_fetch_latency_ms`: latency under concurrent synthetic fetch load
 
-```bash
-curl "http://localhost:8080/configs/checkout-service.timeout?version=resolved&environment=prod&target=checkout-service&client_id=client-42" \
-  -H "X-User-Id: reader" \
-  -H "X-Role: reader"
-```
+Important report fields:
+- `average_ms`: mean latency across the samples
+- `p95_ms`: tail latency for the slowest `5%` of samples
+- `throughput_rps`: requests per second during concurrent synthetic load
+- `failures`: benchmark error count
+- `metrics_delta`: which Prometheus counters moved during the run
 
-### Start a canary rollout
+## Failure Report Fields
 
-```bash
-curl -X POST http://localhost:8080/configs/checkout-service.timeout/rollout \
-  -H "Content-Type: application/json" \
-  -H "X-User-Id: alice" \
-  -H "X-Role: admin" \
-  -d '{
-    "target": "checkout-service",
-    "environment": "prod",
-    "percent": 10,
-    "canary_check": {
-      "metric": "error_rate",
-      "threshold": 0.01,
-      "window": 5
-    }
-  }'
-```
+- `scenario_count`: number of synthetic failure scenarios executed
+- `passed_count` / `failed_count`: scenario outcome totals
+- `error_count`: total scenario failures
+- `observed_latency_ms`: latency observed during degraded operation
+- `propagation_latency_ms`: delivery delay during degraded delivery scenarios
+- `metrics_delta`: fallback, validation, rollback, and delivery counters changed by the scenario
 
-### Compare two versions
+## Measurement Scope
 
-```bash
-curl "http://localhost:8080/configs/checkout-service.timeout/diff?from_version=1&to_version=2&environment=prod" \
-  -H "X-User-Id: reader" \
-  -H "X-Role: reader"
-```
+All performance and reliability outputs in this repository are produced through:
+- local synthetic benchmarks
+- controlled failure-scenario validation
+- the included JSON and Markdown reporting harnesses
 
-## Testing and Benchmarks
+These measurements describe reproducible development and benchmark conditions, not production-user traffic.
 
-Current automated coverage includes:
-- immutable version behavior
-- target-based resolution and deterministic canary selection
-- publish, promote, and rollback flows
-- schema validation success and failure paths
-- RBAC authorization checks
-- audit log creation
-- WebSocket and long-poll delivery
-- Redis fallback behavior in the cache layer
-- Redis fanout forwarding behavior in the event bridge
-- telemetry environment isolation and SDK fallback behavior
+## Technology Stack
 
-What the benchmark suite measures:
-- config publish latency
-- resolved fetch latency
-- cached vs uncached fetch latency
-- rollback latency
-- WebSocket propagation latency
-- long-poll propagation latency
-- long-poll timeout behavior
-- small concurrent fetch latency under synthetic load
+- FastAPI
+- SQLAlchemy
+- PostgreSQL
+- Redis
+- WebSockets
+- Prometheus
+- Python SDK and CLI
+- Docker Compose
+- Kubernetes manifests
+- Pytest
 
-How to interpret the output:
-- `average_ms` is the average latency across the benchmark samples
-- `p95_ms` shows tail latency for the slowest 5% of samples
-- `metrics_delta` shows which Prometheus counters moved during the run
-- the Markdown report is meant for quick review, and the JSON report is better for notes or future comparisons
+## Project Summary
 
-## Design Decisions
-
-### Why Redis?
-- Redis is used for quick fanout and caching
-- It helps WebSocket and long-poll updates work across multiple API instances
-- The system still works without Redis, which keeps Redis from becoming a single point of failure
-
-### Why immutable versioning?
-- It keeps history complete
-- Rollback becomes simple and safe
-- It makes debugging much easier during incidents
-
-### Why canary rollout?
-- A bad config can be as dangerous as a bad deploy
-- Rolling out gradually limits blast radius
-- It allows automatic rollback before full exposure
-
-### Tradeoffs
-- RBAC is demo-friendly header-based auth, not full enterprise auth
-- Rollout health uses synthetic metrics, not a real observability backend
-- Database tables are created through SQLAlchemy metadata instead of formal migrations
-
-## Scaling & Reliability
-
-- API instances can scale horizontally behind a load balancer
-- PostgreSQL remains the durable source of truth
-- Redis provides cross-instance fanout for real-time delivery
-- If Redis fails, the service falls back to local in-memory delivery
-- If the control plane is temporarily unreachable, SDK clients keep using cached last-known-good config
-- Stable assignments and immutable versions make rollback quick and predictable
-
-Prometheus metrics now make the main control-plane behaviors measurable:
-- `config_service_config_fetch_total`
-- `config_service_config_publish_total`
-- `config_service_config_rollback_total`
-- `config_service_config_fetch_latency_seconds`
-- `config_service_config_publish_latency_seconds`
-- `config_service_config_delivery_latency_seconds`
-- `config_service_cache_hits_total`
-- `config_service_cache_misses_total`
-- `config_service_websocket_updates_total`
-- `config_service_longpoll_updates_total`
-- `config_service_redis_fallback_total`
-
-## Future Improvements
-
-- Multi-region or region-aware configs
-- Multi-tenant targeting
-- Better rollout analytics and alerting
-- Real metrics integration instead of synthetic signals
-- OIDC / JWT-based authentication
-- Formal database migrations
-
-## Resume Highlights
-
-- Built a centralized configuration control plane with 19 FastAPI endpoints, immutable version history, and environment-aware config resolution across `dev`, `staging`, and `prod`.
-- Implemented deterministic `1%` to `100%` canary rollouts with promotion, rollback, Redis-based fanout, and SDK last-known-good fallback to reduce the blast radius of bad config pushes.
-- Added production-style reliability features including RBAC audit logs, Prometheus metrics, Docker Compose, Kubernetes manifests, a reproducible benchmark harness, and 37 automated tests covering rollout, delivery, and failure scenarios.
+This repository shows:
+- non-trivial backend state management
+- rollout safety and rollback logic
+- delivery behavior for live config updates
+- fallback behavior when Redis degrades
+- observability and measurable outputs
+- reproducible engineering evidence instead of unverified claims

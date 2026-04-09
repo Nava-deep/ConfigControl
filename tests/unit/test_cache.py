@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import redis
 
 from app.core.settings import Settings
@@ -15,6 +17,15 @@ class FailingRedisClient:
 
     def publish(self, channel: str, payload: str):
         raise redis.RedisError(f"boom publishing {channel}")
+
+
+class DelayedFailingRedisClient(FailingRedisClient):
+    def __init__(self, delay_seconds: float) -> None:
+        self.delay_seconds = delay_seconds
+
+    def get(self, key: str):
+        time.sleep(self.delay_seconds)
+        raise redis.RedisError(f"delayed boom reading {key}")
 
 
 def test_cache_falls_back_to_memory_when_redis_get_fails():
@@ -43,4 +54,18 @@ def test_cache_publish_degrades_gracefully_when_redis_publish_fails():
 
     cache.publish("config-events", {"event": "rollout_started"})
 
+    assert cache.is_available() is False
+
+
+def test_cache_serves_memory_value_after_delayed_redis_get_failure():
+    cache = CacheService(Settings(use_redis=False))
+    cache.set_json("config:prod:checkout-service.timeout:version:3", {"version": 3})
+    cache.client = DelayedFailingRedisClient(delay_seconds=0.02)
+
+    started = time.perf_counter()
+    payload = cache.get_json("config:prod:checkout-service.timeout:version:3")
+    elapsed = time.perf_counter() - started
+
+    assert payload == {"version": 3}
+    assert elapsed >= 0.018
     assert cache.is_available() is False
