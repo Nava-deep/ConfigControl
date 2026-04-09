@@ -25,6 +25,7 @@ from app.schemas.config import (
     ConfigVersionResponse,
     DryRunMigrationRequest,
     DryRunMigrationResponse,
+    EnvironmentName,
     RollbackRequest,
     RolloutRequest,
     RolloutResponse,
@@ -171,7 +172,7 @@ class ConfigService:
                 )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="concurrent version creation conflict")
 
-    def list_configs(self, environment: str | None = None) -> list[ConfigSummary]:
+    def list_configs(self, environment: EnvironmentName | None = None) -> list[ConfigSummary]:
         with self.database.session() as session:
             stmt = select(ConfigVersion).where(ConfigVersion.is_latest.is_(True)).order_by(
                 ConfigVersion.name, ConfigVersion.environment
@@ -216,7 +217,7 @@ class ConfigService:
                 )
             return results
 
-    def list_versions(self, name: str, environment: str = "prod") -> list[VersionHistoryEntry]:
+    def list_versions(self, name: str, environment: EnvironmentName = "prod") -> list[VersionHistoryEntry]:
         with self.database.session() as session:
             versions = (
                 session.execute(
@@ -252,13 +253,13 @@ class ConfigService:
         version: str | int | None,
         target: str | None,
         client_id: str | None,
-        environment: str,
+        environment: EnvironmentName,
     ) -> ConfigReadResponse:
         resolved_target = target or self.infer_target(name)
         source = "stable"
         try:
-            with self.database.session() as session:
-                if version is None or version == "resolved":
+            if version is None or version == "resolved":
+                with self.database.session() as session:
                     resolved_version = self._resolve_stable_version(session, name, resolved_target, environment)
                     active_rollout = self._get_active_rollout(session, name, resolved_target, environment)
                     if active_rollout and client_id and self._is_canary_client(
@@ -270,25 +271,41 @@ class ConfigService:
                     ):
                         resolved_version = active_rollout.to_version
                         source = "canary"
+                    cached_payload = self._get_cached_version_payload(name, environment, resolved_version)
+                    if cached_payload is not None:
+                        CONFIG_FETCHES.labels(source, environment, "success").inc()
+                        return self._payload_to_read_response(cached_payload, target=resolved_target, source=source)
                     record = self._get_version(session, name, environment, resolved_version)
-                elif version == "latest":
-                    source = "latest"
+            elif version == "latest":
+                source = "latest"
+                cached_payload = self.cache.get_json(self._latest_cache_key(name, environment))
+                if cached_payload is not None:
+                    CONFIG_FETCHES.labels(source, environment, "success").inc()
+                    return self._payload_to_read_response(cached_payload, target=resolved_target, source=source)
+                with self.database.session() as session:
                     record = self._get_latest_version(session, name, environment)
                     if record is None:
                         raise HTTPException(
                             status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"config '{name}' not found in environment '{environment}'",
                         )
-                else:
-                    source = "explicit"
-                    try:
-                        version_int = int(version)
-                    except (TypeError, ValueError) as exc:
-                        raise HTTPException(
-                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                            detail="version must be 'resolved', 'latest', or an integer",
-                        ) from exc
+                    self._cache_version(record)
+            else:
+                source = "explicit"
+                try:
+                    version_int = int(version)
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail="version must be 'resolved', 'latest', or an integer",
+                    ) from exc
+                cached_payload = self._get_cached_version_payload(name, environment, version_int)
+                if cached_payload is not None:
+                    CONFIG_FETCHES.labels(source, environment, "success").inc()
+                    return self._payload_to_read_response(cached_payload, target=resolved_target, source=source)
+                with self.database.session() as session:
                     record = self._get_version(session, name, environment, version_int)
+                    self._cache_version(record)
                 response = ConfigReadResponse(
                     name=record.name,
                     environment=record.environment,
@@ -624,7 +641,7 @@ class ConfigService:
                 issues=issues + ([f"candidate value: {'; '.join(candidate_errors)}"] if candidate_errors else []),
             )
 
-    def list_audit_logs(self, name: str | None = None, environment: str | None = None) -> list[AuditEntryResponse]:
+    def list_audit_logs(self, name: str | None = None, environment: EnvironmentName | None = None) -> list[AuditEntryResponse]:
         with self.database.session() as session:
             stmt = select(AuditLog).order_by(desc(AuditLog.timestamp))
             if name:
@@ -638,7 +655,7 @@ class ConfigService:
         self,
         *,
         name: str,
-        environment: str,
+        environment: EnvironmentName,
         from_version: int,
         to_version: int,
     ) -> ConfigDiffResponse:
@@ -661,7 +678,7 @@ class ConfigService:
             return config_name.split(".", 1)[0]
         return self.settings.default_target
 
-    def _get_latest_version(self, session, name: str, environment: str) -> ConfigVersion | None:
+    def _get_latest_version(self, session, name: str, environment: EnvironmentName) -> ConfigVersion | None:
         return session.execute(
             select(ConfigVersion)
             .where(ConfigVersion.name == name, ConfigVersion.environment == environment)
@@ -669,7 +686,7 @@ class ConfigService:
             .limit(1)
         ).scalar_one_or_none()
 
-    def _get_version(self, session, name: str, environment: str, version: int) -> ConfigVersion:
+    def _get_version(self, session, name: str, environment: EnvironmentName, version: int) -> ConfigVersion:
         record = session.execute(
             select(ConfigVersion)
             .where(
@@ -686,7 +703,7 @@ class ConfigService:
             )
         return record
 
-    def _get_or_create_assignment(self, session, name: str, target: str, environment: str) -> ConfigAssignment:
+    def _get_or_create_assignment(self, session, name: str, target: str, environment: EnvironmentName) -> ConfigAssignment:
         assignment = self._get_assignment(session, name, target, environment)
         if assignment:
             return assignment
@@ -715,7 +732,7 @@ class ConfigService:
         session.flush()
         return assignment
 
-    def _get_assignment(self, session, name: str, target: str, environment: str) -> ConfigAssignment | None:
+    def _get_assignment(self, session, name: str, target: str, environment: EnvironmentName) -> ConfigAssignment | None:
         return session.execute(
             select(ConfigAssignment)
             .where(
@@ -726,7 +743,7 @@ class ConfigService:
             .limit(1)
         ).scalar_one_or_none()
 
-    def _resolve_stable_version(self, session, name: str, target: str, environment: str) -> int:
+    def _resolve_stable_version(self, session, name: str, target: str, environment: EnvironmentName) -> int:
         assignment = self._get_assignment(session, name, target, environment)
         if assignment:
             return assignment.stable_version
@@ -743,7 +760,7 @@ class ConfigService:
             )
         return latest.version
 
-    def _get_active_rollout(self, session, name: str, target: str, environment: str) -> Rollout | None:
+    def _get_active_rollout(self, session, name: str, target: str, environment: EnvironmentName) -> Rollout | None:
         return session.execute(
             select(Rollout)
             .where(
@@ -756,7 +773,7 @@ class ConfigService:
             .limit(1)
         ).scalar_one_or_none()
 
-    def _is_canary_client(self, name: str, environment: str, target: str, client_id: str, percent: int) -> bool:
+    def _is_canary_client(self, name: str, environment: EnvironmentName, target: str, client_id: str, percent: int) -> bool:
         bucket = int(
             hashlib.sha256(f"{name}:{environment}:{target}:{client_id}".encode("utf-8")).hexdigest()[:8],
             16,
@@ -774,15 +791,15 @@ class ConfigService:
             "description": version.description,
             "created_at": version.created_at.isoformat(),
         }
-        self.cache.set_json(f"config:{version.environment}:{version.name}:latest", payload)
-        self.cache.set_json(f"config:{version.environment}:{version.name}:version:{version.version}", payload)
+        self.cache.set_json(self._latest_cache_key(version.name, version.environment), payload)
+        self.cache.set_json(self._version_cache_key(version.name, version.environment, version.version), payload)
 
     async def _publish_event(
         self,
         *,
         event: str,
         config_name: str,
-        environment: str,
+        environment: EnvironmentName,
         target: str,
         version: int,
         stable_version: int,
@@ -897,7 +914,7 @@ class ConfigService:
         session,
         name: str,
         schema: dict[str, Any],
-        environment: str,
+        environment: EnvironmentName,
     ) -> dict[str, Sequence[int]]:
         versions = session.execute(
             select(ConfigVersion).where(ConfigVersion.name == name, ConfigVersion.environment == environment)
@@ -910,6 +927,48 @@ class ConfigService:
             else:
                 compatible.append(version.version)
         return {"compatible_versions": compatible, "incompatible_versions": incompatible}
+
+    def _get_cached_version_payload(
+        self,
+        name: str,
+        environment: EnvironmentName,
+        version: int,
+    ) -> dict[str, Any] | None:
+        return self.cache.get_json(self._version_cache_key(name, environment, version))
+
+    @staticmethod
+    def _latest_cache_key(name: str, environment: EnvironmentName) -> str:
+        return f"config:{environment}:{name}:latest"
+
+    @staticmethod
+    def _version_cache_key(name: str, environment: EnvironmentName, version: int) -> str:
+        return f"config:{environment}:{name}:version:{version}"
+
+    @staticmethod
+    def _coerce_datetime(value: str | datetime) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    def _payload_to_read_response(
+        self,
+        payload: dict[str, Any],
+        *,
+        target: str,
+        source: str,
+    ) -> ConfigReadResponse:
+        return ConfigReadResponse(
+            name=payload["name"],
+            environment=payload["environment"],
+            version=payload["version"],
+            target=target,
+            source=source,
+            description=payload.get("description"),
+            labels=payload.get("labels", {}),
+            value=payload["value"],
+            schema_=payload["schema"],
+            created_at=self._coerce_datetime(payload["created_at"]),
+        )
 
     def _diff_values(self, before: Any, after: Any, path: str = "") -> list[ConfigDiffEntry]:
         if isinstance(before, dict) and isinstance(after, dict):

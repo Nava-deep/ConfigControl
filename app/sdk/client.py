@@ -16,6 +16,8 @@ import httpx
 from pydantic import BaseModel
 from websockets.asyncio.client import connect
 
+from app.schemas.config import EnvironmentName
+
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 SDK_VERSION = "0.1.0"
@@ -28,7 +30,7 @@ class ConfigClient(Generic[ModelT]):
         base_url: str,
         client_id: str,
         target: str,
-        environment: str = "prod",
+        environment: EnvironmentName = "prod",
         ttl_seconds: int = 30,
         cache_dir: Path | None = None,
         user_id: str = "sdk-client",

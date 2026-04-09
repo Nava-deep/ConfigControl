@@ -10,6 +10,7 @@ from sqlalchemy import desc, func, select
 from app.core.metrics import CLIENT_FAILURE_REPORTS
 from app.core.settings import Settings
 from app.db.models import ClientFailureEvent
+from app.schemas.config import EnvironmentName
 from app.db.session import Database
 from app.schemas.telemetry import (
     FailureTelemetryEventResponse,
@@ -70,7 +71,7 @@ class TelemetryService:
         self,
         *,
         config_name: str | None = None,
-        environment: str | None = None,
+        environment: EnvironmentName | None = None,
         target: str | None = None,
         source: str | None = None,
         limit: int = 100,
@@ -111,7 +112,7 @@ class TelemetryService:
         self,
         *,
         config_name: str | None = None,
-        environment: str | None = None,
+        environment: EnvironmentName | None = None,
         target: str | None = None,
         window_minutes: int = 60,
         limit: int = 50,

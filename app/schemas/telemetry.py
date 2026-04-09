@@ -5,13 +5,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.config import EnvironmentName
+
 
 ConfigSource = Literal["explicit", "latest", "stable", "canary", "unknown"]
 
 
 class FailureTelemetryRequest(BaseModel):
     config_name: str
-    environment: str = "prod"
+    environment: EnvironmentName = "prod"
     target: str
     source: str = Field(min_length=1, max_length=80)
     error_type: str = Field(min_length=1, max_length=120)
@@ -35,7 +37,7 @@ class FailureTelemetryResponse(BaseModel):
 class FailureTelemetryEventResponse(BaseModel):
     event_id: str
     config_name: str
-    environment: str
+    environment: EnvironmentName
     target: str
     source: str
     error_type: str
@@ -52,7 +54,7 @@ class FailureTelemetryEventResponse(BaseModel):
 
 class FailureTelemetrySummaryResponse(BaseModel):
     config_name: str
-    environment: str
+    environment: EnvironmentName
     target: str
     error_type: str
     fingerprint: str

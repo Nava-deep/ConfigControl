@@ -536,3 +536,58 @@ def test_failure_telemetry_is_filtered_by_environment(client):
     assert len(staging_summary.json()) == 1
     assert prod_summary.json()[0]["environment"] == "prod"
     assert staging_summary.json()[0]["environment"] == "staging"
+
+
+def test_latest_read_uses_cached_payload_when_database_session_is_unavailable(client, monkeypatch):
+    assert create_version(client, 2000).status_code == 201
+    container = client.app.state.container
+
+    def broken_session():
+        raise AssertionError("database session should not be used for cached latest reads")
+
+    monkeypatch.setattr(container.database, "session", broken_session)
+
+    response = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"version": "latest", "environment": "prod"},
+    )
+    assert response.status_code == 200
+    assert response.json()["version"] == 1
+    assert response.json()["source"] == "latest"
+
+
+def test_invalid_environment_values_return_422(client):
+    config_response = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"environment": "qa"},
+    )
+    telemetry_response = client.post(
+        "/telemetry/failures",
+        headers=READER_HEADERS,
+        json={
+            "config_name": "checkout-service.timeout",
+            "environment": "qa",
+            "target": "checkout-service",
+            "source": "demo-client",
+            "error_type": "RuntimeError",
+            "fingerprint": "0123456789abcdef0123456789abcdef",
+            "anonymous_installation_id": "anon-installation-1234567890",
+            "config_version": 1,
+            "config_source": "stable",
+            "metadata": {},
+        },
+    )
+
+    assert config_response.status_code == 422
+    assert telemetry_response.status_code == 422
+
+
+def test_websocket_invalid_environment_is_rejected(client):
+    with pytest.raises(Exception):
+        with client.websocket_connect(
+            "/watch/ws?config_name=checkout-service.timeout&environment=qa&target=checkout-service",
+            headers=READER_HEADERS,
+        ):
+            pass

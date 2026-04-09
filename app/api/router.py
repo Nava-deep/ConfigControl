@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, WebSocketException, status
 from fastapi.responses import JSONResponse
 
@@ -15,6 +17,7 @@ from app.schemas.config import (
     ConfigVersionResponse,
     DryRunMigrationRequest,
     DryRunMigrationResponse,
+    EnvironmentName,
     NotificationEvent,
     RollbackRequest,
     RolloutRequest,
@@ -31,6 +34,7 @@ from app.schemas.telemetry import (
 )
 
 router = APIRouter()
+VALID_ENVIRONMENTS = {"dev", "staging", "prod"}
 
 
 def container_from_request(request: Request) -> ServiceContainer:
@@ -39,6 +43,17 @@ def container_from_request(request: Request) -> ServiceContainer:
 
 def container_from_ws(websocket: WebSocket) -> ServiceContainer:
     return websocket.app.state.container
+
+
+def validate_ws_environment(environment: str | None) -> EnvironmentName | None:
+    if environment is None:
+        return None
+    if environment not in VALID_ENVIRONMENTS:
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="environment must be one of: dev, staging, prod",
+        )
+    return cast(EnvironmentName, environment)
 
 
 @router.get("/health/live")
@@ -65,7 +80,7 @@ async def metrics_endpoint():
 @router.get("/configs", response_model=list[ConfigSummary])
 async def list_configs(
     request: Request,
-    environment: str | None = Query(default=None),
+    environment: EnvironmentName | None = Query(default=None),
     _: Actor = Depends(get_actor),
 ):
     return container_from_request(request).config_service.list_configs(environment)
@@ -87,7 +102,7 @@ async def get_config(
     version: str | None = Query(default="resolved"),
     target: str | None = Query(default=None),
     client_id: str | None = Query(default=None),
-    environment: str = Query(default="prod"),
+    environment: EnvironmentName = Query(default="prod"),
     _: Actor = Depends(get_actor),
 ):
     return container_from_request(request).config_service.get_config(
@@ -103,7 +118,7 @@ async def get_config(
 async def get_versions(
     name: str,
     request: Request,
-    environment: str = Query(default="prod"),
+    environment: EnvironmentName = Query(default="prod"),
     _: Actor = Depends(get_actor),
 ):
     return container_from_request(request).config_service.list_versions(name, environment)
@@ -115,7 +130,7 @@ async def diff_versions(
     request: Request,
     from_version: int = Query(ge=1),
     to_version: int = Query(ge=1),
-    environment: str = Query(default="prod"),
+    environment: EnvironmentName = Query(default="prod"),
     _: Actor = Depends(get_actor),
 ):
     return container_from_request(request).config_service.diff_versions(
@@ -170,7 +185,7 @@ async def dry_run_schema_migration(
 async def get_audit(
     request: Request,
     name: str | None = Query(default=None),
-    environment: str | None = Query(default=None),
+    environment: EnvironmentName | None = Query(default=None),
     _: Actor = Depends(require_role("admin", "operator", "reader")),
 ):
     return container_from_request(request).config_service.list_audit_logs(name, environment)
@@ -198,7 +213,7 @@ async def ingest_failure_telemetry(
 async def list_failure_telemetry(
     request: Request,
     config_name: str | None = Query(default=None),
-    environment: str | None = Query(default=None),
+    environment: EnvironmentName | None = Query(default=None),
     target: str | None = Query(default=None),
     source: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
@@ -217,7 +232,7 @@ async def list_failure_telemetry(
 async def summarize_failure_telemetry(
     request: Request,
     config_name: str | None = Query(default=None),
-    environment: str | None = Query(default=None),
+    environment: EnvironmentName | None = Query(default=None),
     target: str | None = Query(default=None),
     window_minutes: int = Query(default=60, ge=1, le=10080),
     limit: int = Query(default=50, ge=1, le=200),
@@ -237,7 +252,7 @@ async def longpoll(
     request: Request,
     last_sequence: int = Query(default=0, ge=0),
     config_name: str | None = Query(default=None),
-    environment: str | None = Query(default=None),
+    environment: EnvironmentName | None = Query(default=None),
     target: str | None = Query(default=None),
     timeout: float | None = Query(default=None, gt=0),
     actor: Actor = Depends(get_actor),
@@ -265,7 +280,7 @@ async def websocket_watch(websocket: WebSocket):
     container = container_from_ws(websocket)
     actor = get_websocket_actor(websocket)
     config_name = websocket.query_params.get("config_name")
-    environment = websocket.query_params.get("environment")
+    environment = validate_ws_environment(websocket.query_params.get("environment"))
     target = websocket.query_params.get("target")
     if actor.role == "reader" and not (config_name or target):
         raise WebSocketException(

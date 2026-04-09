@@ -256,4 +256,4 @@ curl "http://localhost:8080/configs/checkout-service.timeout/diff?from_version=1
 
 - Built a centralized configuration control plane with 19 FastAPI endpoints, immutable version history, and environment-aware config resolution across `dev`, `staging`, and `prod`.
 - Implemented deterministic `1%` to `100%` canary rollouts with promotion, rollback, Redis-based fanout, and SDK last-known-good fallback to reduce the blast radius of bad config pushes.
-- Added production-style reliability features including RBAC audit logs, Prometheus metrics, Docker Compose, Kubernetes manifests, and 24 automated tests covering rollout, delivery, and failure scenarios.
+- Added production-style reliability features including RBAC audit logs, Prometheus metrics, Docker Compose, Kubernetes manifests, and 27 automated tests covering rollout, delivery, and failure scenarios.
