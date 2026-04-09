@@ -1,231 +1,259 @@
 # Config Control Plane
 
-Production-style centralized configuration management service for backend teams. It provides immutable config versions, JSON Schema validation, environment-aware resolution, 1%-100% canary rollouts, promotion/rollback, WebSocket and long-poll delivery, Redis fanout with fallback, RBAC audit logs, anonymous failure telemetry, a typed Python SDK, and an operator CLI.
+Centralized configuration management service with versioning, canary rollouts, and real-time delivery.
 
-## Why it stands out
+## What Problem Does This Solve?
 
-This is not a toy CRUD app. It models configuration as a control plane:
+Managing application configuration is harder than it looks.
 
-- versions are immutable
-- stable state is tracked per `(config, environment, target)`
-- rollouts are deterministic and auditable
-- Redis improves fanout but is not required for correctness
-- clients keep serving last-known-good config during outages
+Common problems:
+- Different services or environments drift out of sync
+- A bad config change can break production instantly
+- Teams often lack safe rollout and rollback tools
+- Config changes are hard to audit and debug later
 
-## At a glance
+This project solves that by providing:
+- A central place to store and read config
+- Immutable versions so old values are never lost
+- Safe canary rollouts from `1%` to `100%`
+- Rollback to a known-good version
+- Real-time delivery so clients can update without restart
+- Audit logs to see who changed what and when
 
-| Area | Signal |
-| --- | --- |
-| API surface | 19 FastAPI endpoints including diff, rollout, promote, rollback, telemetry, health, metrics, WebSocket, and long-poll |
-| Rollouts | Deterministic 1%-100% canary routing with auto rollback and manual/auto promotion |
-| Environments | `dev`, `staging`, `prod` isolation across versions, audit logs, notifications, and telemetry |
-| Delivery | Pull API, typed SDK, WebSocket hot reload, 25-second long-poll, Redis fanout, in-memory fallback |
-| Observability | 13 Prometheus metrics plus structured rollout and startup logs |
-| Reliability | Postgres source of truth, Redis optional, SDK TTL cache + last-known-good fallback |
-| Verification | 23 automated tests covering versioning, rollout safety, RBAC, delivery, and telemetry |
-| Platform packaging | Docker Compose, GitHub Actions CI, Prometheus config, and 4 Kubernetes manifests |
+## Key Features
 
-## Architecture
+- Immutable versioning: every config change creates a new version
+- Environment-aware configs: supports `dev`, `staging`, and `prod`
+- Canary rollouts: gradual rollout from `1%` to `100%`
+- Promote and rollback flows
+- JSON Schema validation before publish
+- Dry-run schema validation for migration safety
+- RBAC with `admin`, `operator`, and `reader` roles
+- Audit logs for all config mutations
+- Real-time updates through WebSocket and long-poll
+- Redis fanout across instances with in-memory fallback
+- Typed Python SDK with TTL cache and last-known-good fallback
+- Operator CLI for push, get, diff, rollout, rollback, and audit
+- Anonymous client failure telemetry with summaries
+- Prometheus metrics and health endpoints
+
+## System Architecture
 
 ```mermaid
 flowchart LR
-    Operators["Operators"] --> CLI["configctl CLI"]
-    Operators --> API["FastAPI Control Plane"]
-    Service["Application Service"] --> SDK["Python SDK"]
-    SDK --> API
-    API --> PG["Postgres\nversions + assignments + rollouts + audit + telemetry"]
-    API --> REDIS["Redis\ncache + pubsub + synthetic metrics"]
-    API --> HUB["WebSocket / Long-poll hub"]
-    REDIS --> BRIDGE["Redis event bridge"]
-    BRIDGE --> HUB
-    API --> CANARY["Canary monitor"]
-    API --> PROM["Prometheus /metrics"]
-    HUB --> SDK
+    Operator["Operator / CLI"] --> API["FastAPI API"]
+    Client["Application / SDK"] --> API
+    API --> DB["PostgreSQL"]
+    API --> Redis["Redis"]
+    API --> Watch["WebSocket / Long-poll Delivery"]
+    Redis --> Fanout["Cross-instance Fanout"]
+    Fanout --> Watch
+    API --> Canary["Canary Monitor"]
+    Canary --> DB
+    Canary --> Redis
+    Watch --> Client
 ```
 
-## Core design
+What each component does:
+- `FastAPI API`: accepts config writes, reads, rollouts, rollback, audit, and telemetry requests
+- `PostgreSQL`: source of truth for versions, assignments, rollouts, audit logs, and telemetry
+- `Redis`: speeds up fanout and caching; also stores synthetic rollout metrics
+- `WebSocket / Long-poll`: pushes config changes to connected clients
+- `Canary Monitor`: watches rollout health and promotes or rolls back
+- `CLI / SDK`: operator and client interfaces for using the control plane
 
-### Versioning model
+## How It Works
 
-- `POST /configs` creates a new immutable version.
-- Stable state is stored separately from version history.
-- Rollouts temporarily overlay stable state with a candidate version.
-- Rollback is a pointer move, not a destructive edit.
+### 1. Create a config
+- An operator sends `POST /configs`
+- The request includes a config name, environment, schema, and value
 
-### Resolution model
+### 2. Validate it
+- The service checks the JSON Schema
+- It validates the config value against that schema
+- If invalid, the write is rejected
 
-For `GET /configs/{name}?version=resolved`, the control plane:
+### 3. Store it as a new version
+- A new immutable version is created
+- Older versions remain available for history and rollback
 
-1. resolves the target
-2. loads the stable assignment for `(name, environment, target)`
-3. checks for an active rollout
-4. deterministically buckets the client into stable or canary
-5. returns the matching version
+### 4. Start a rollout
+- The operator can roll out the latest version to a target service
+- Clients are deterministically split into stable or canary groups
 
-### Failure model
+### 5. Deliver updates to clients
+- Clients fetch config through the API or SDK
+- Connected clients can receive updates through WebSocket or long-poll
+- If the rollout metric degrades, the system rolls back
 
-- Postgres is authoritative.
-- Redis is an optimization for cache and cross-instance fanout.
-- If Redis is unavailable, reads and writes still work and local delivery continues.
-- If the control plane is unavailable, SDK clients fall back to cached last-known-good config.
+## Tech Stack
 
-## Quickstart
+- Backend API: FastAPI
+- Database: PostgreSQL
+- Cache / Fanout: Redis
+- ORM: SQLAlchemy
+- Validation: `jsonschema`
+- Client delivery: WebSockets + long-poll
+- SDK / CLI: Python
+- Metrics: Prometheus
+- Local orchestration: Docker Compose
+- Deployment examples: Kubernetes manifests
+- Testing: Pytest
 
-Local development:
+## Getting Started
+
+### 1. Clone the repository
 
 ```bash
-cd /Users/navadeepboyana/Documents/project2
+git clone https://github.com/Nava-deep/ConfigControl.git
+cd ConfigControl
+```
+
+### 2. Create local environment file
+
+```bash
 cp .env.example .env
+```
+
+### 3. Start the full stack
+
+```bash
+docker compose up --build
+```
+
+This starts:
+- API on `http://localhost:8080`
+- Swagger docs on `http://localhost:8080/docs`
+- Prometheus on `http://localhost:9090`
+- PostgreSQL
+- Redis
+
+### 4. Optional: local Python workflow
+
+```bash
 make install
 make test
 make run
 ```
 
-Full stack:
+### 5. Seed demo data
 
 ```bash
-cd /Users/navadeepboyana/Documents/project2
-docker compose up --build
-```
-
-Seed demo configs:
-
-```bash
-cd /Users/navadeepboyana/Documents/project2
 make seed-demo
 ```
 
-Services:
-
-- API: [http://localhost:8080](http://localhost:8080)
-- Prometheus: [http://localhost:9090](http://localhost:9090)
-
-## Demo flow
-
-Start the demo client:
+### 6. Run tests
 
 ```bash
-.venv/bin/config-demo-client --base-url http://localhost:8080 --environment prod
+make test
+make test-unit
+make test-integration
+make verify
 ```
 
-Push baseline and candidate configs:
+## Example Usage
 
-```bash
-.venv/bin/configctl --environment prod push \
-  --name checkout-service.timeout \
-  --schema-file examples/timeout.schema.json \
-  --value-file examples/timeout.v1.json \
-  --description "baseline timeout" \
-  --label team=checkout
-
-.venv/bin/configctl --environment prod push \
-  --name checkout-service.timeout \
-  --value-file examples/timeout.v2.json \
-  --description "candidate timeout" \
-  --label team=checkout
-```
-
-Start a canary rollout:
-
-```bash
-.venv/bin/configctl --environment prod rollout \
-  --name checkout-service.timeout \
-  --target checkout-service \
-  --percent 10 \
-  --metric error_rate \
-  --threshold 0.01 \
-  --window 5
-```
-
-Trigger auto rollback:
-
-```bash
-.venv/bin/configctl --environment prod simulate-metric \
-  --target checkout-service \
-  --metric error_rate \
-  --value 0.02
-```
-
-Inspect diff, audit, and failure summaries:
-
-```bash
-.venv/bin/configctl --environment prod diff --name checkout-service.timeout --from-version 1 --to-version 2
-.venv/bin/configctl --environment prod audit --name checkout-service.timeout
-.venv/bin/configctl --environment prod failure-summary --name checkout-service.timeout --window-minutes 60
-```
-
-## API examples
-
-Create config:
+### Create a config
 
 ```bash
 curl -X POST http://localhost:8080/configs \
-  -H 'Content-Type: application/json' \
-  -H 'X-User-Id: alice' \
-  -H 'X-Role: admin' \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: alice" \
+  -H "X-Role: admin" \
   -d '{
-    "name":"checkout-service.timeout",
-    "environment":"prod",
-    "labels":{"team":"checkout","owner":"platform"},
-    "schema":{"type":"object","properties":{"timeout_ms":{"type":"integer","minimum":1}},"required":["timeout_ms"],"additionalProperties":false},
-    "value":{"timeout_ms":2000},
-    "description":"baseline timeout"
+    "name": "checkout-service.timeout",
+    "environment": "prod",
+    "labels": {"team": "checkout"},
+    "schema": {
+      "type": "object",
+      "properties": {
+        "timeout_ms": {"type": "integer", "minimum": 1}
+      },
+      "required": ["timeout_ms"],
+      "additionalProperties": false
+    },
+    "value": {"timeout_ms": 2000},
+    "description": "baseline timeout"
   }'
 ```
 
-Resolve config:
+### Read the resolved config
 
 ```bash
-curl 'http://localhost:8080/configs/checkout-service.timeout?version=resolved&environment=prod&target=checkout-service&client_id=client-42' \
-  -H 'X-User-Id: reader' \
-  -H 'X-Role: reader'
+curl "http://localhost:8080/configs/checkout-service.timeout?version=resolved&environment=prod&target=checkout-service&client_id=client-42" \
+  -H "X-User-Id: reader" \
+  -H "X-Role: reader"
 ```
 
-Diff versions:
+### Start a canary rollout
 
 ```bash
-curl 'http://localhost:8080/configs/checkout-service.timeout/diff?from_version=1&to_version=2&environment=prod' \
-  -H 'X-User-Id: reader' \
-  -H 'X-Role: reader'
+curl -X POST http://localhost:8080/configs/checkout-service.timeout/rollout \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: alice" \
+  -H "X-Role: admin" \
+  -d '{
+    "target": "checkout-service",
+    "environment": "prod",
+    "percent": 10,
+    "canary_check": {
+      "metric": "error_rate",
+      "threshold": 0.01,
+      "window": 5
+    }
+  }'
 ```
 
-## SDK example
+### Compare two versions
 
-```python
-from pydantic import BaseModel
-from app.sdk.client import ConfigClient
-
-
-class TimeoutConfig(BaseModel):
-    timeout_ms: int
-
-
-client = ConfigClient[TimeoutConfig](
-    base_url="http://localhost:8080",
-    client_id="checkout-api-1",
-    target="checkout-service",
-    environment="prod",
-    ttl_seconds=30,
-)
-
-config = client.get_typed("checkout-service.timeout", TimeoutConfig)
-print(config.timeout_ms)
-client.close()
+```bash
+curl "http://localhost:8080/configs/checkout-service.timeout/diff?from_version=1&to_version=2&environment=prod" \
+  -H "X-User-Id: reader" \
+  -H "X-Role: reader"
 ```
 
-## Repo guide
+## Design Decisions
 
-- [Architecture](/Users/navadeepboyana/Documents/project2/docs/architecture.md)
-- [Failure modes](/Users/navadeepboyana/Documents/project2/docs/failure_modes.md)
-- [Design decisions](/Users/navadeepboyana/Documents/project2/docs/design_decisions.md)
-- [Interview guide](/Users/navadeepboyana/Documents/project2/docs/interview_guide.md)
-- [Canary incident report](/Users/navadeepboyana/Documents/project2/incident_reports/canary_rollback.md)
-- [Redis outage incident report](/Users/navadeepboyana/Documents/project2/incident_reports/redis_outage.md)
+### Why Redis?
+- Redis is used for quick fanout and caching
+- It helps WebSocket and long-poll updates work across multiple API instances
+- The system still works without Redis, which keeps Redis from becoming a single point of failure
 
-## Current limits
+### Why immutable versioning?
+- It keeps history complete
+- Rollback becomes simple and safe
+- It makes debugging much easier during incidents
 
-- Auth is demo-grade header-based RBAC, not OIDC/JWT backed.
-- Table creation uses SQLAlchemy metadata instead of formal migrations.
-- Rollout health uses synthetic metrics rather than a real telemetry backend.
+### Why canary rollout?
+- A bad config can be as dangerous as a bad deploy
+- Rolling out gradually limits blast radius
+- It allows automatic rollback before full exposure
 
-Those are deliberate tradeoffs to keep the repo runnable while still demonstrating control-plane design, rollout safety, and operational thinking.
+### Tradeoffs
+- RBAC is demo-friendly header-based auth, not full enterprise auth
+- Rollout health uses synthetic metrics, not a real observability backend
+- Database tables are created through SQLAlchemy metadata instead of formal migrations
+
+## Scaling & Reliability
+
+- API instances can scale horizontally behind a load balancer
+- PostgreSQL remains the durable source of truth
+- Redis provides cross-instance fanout for real-time delivery
+- If Redis fails, the service falls back to local in-memory delivery
+- If the control plane is temporarily unreachable, SDK clients keep using cached last-known-good config
+- Stable assignments and immutable versions make rollback quick and predictable
+
+## Future Improvements
+
+- Multi-region or region-aware configs
+- Multi-tenant targeting
+- Better rollout analytics and alerting
+- Real metrics integration instead of synthetic signals
+- OIDC / JWT-based authentication
+- Formal database migrations
+
+## Resume Highlights
+
+- Built a centralized configuration control plane with 19 FastAPI endpoints, immutable version history, and environment-aware config resolution across `dev`, `staging`, and `prod`.
+- Implemented deterministic `1%` to `100%` canary rollouts with promotion, rollback, Redis-based fanout, and SDK last-known-good fallback to reduce the blast radius of bad config pushes.
+- Added production-style reliability features including RBAC audit logs, Prometheus metrics, Docker Compose, Kubernetes manifests, and 24 automated tests covering rollout, delivery, and failure scenarios.
