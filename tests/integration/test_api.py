@@ -591,3 +591,152 @@ def test_websocket_invalid_environment_is_rejected(client):
             headers=READER_HEADERS,
         ):
             pass
+
+
+def test_schema_validation_failure_returns_422_without_creating_a_new_version(client):
+    assert create_version(client, 2000).status_code == 201
+
+    invalid = client.post(
+        "/configs",
+        headers=ADMIN_HEADERS,
+        json={
+            "name": "checkout-service.timeout",
+            "environment": "prod",
+            "value": {"timeout_ms": 0},
+        },
+    )
+    assert invalid.status_code == 422
+
+    versions = client.get(
+        "/configs/checkout-service.timeout/versions",
+        headers=READER_HEADERS,
+        params={"environment": "prod"},
+    )
+    assert versions.status_code == 200
+    assert [item["version"] for item in versions.json()] == [1]
+
+
+def test_create_rollout_and_rollback_write_audit_entries(client):
+    assert create_version(client, 2000, "baseline").status_code == 201
+    assert create_version(client, 3500, "candidate").status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 10},
+    )
+    assert rollout.status_code == 200, rollout.text
+
+    rollback = client.post(
+        "/configs/checkout-service.timeout/rollback",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "target_version": 1},
+    )
+    assert rollback.status_code == 200, rollback.text
+
+    audit = client.get(
+        "/audit",
+        headers=ADMIN_HEADERS,
+        params={"name": "checkout-service.timeout", "environment": "prod"},
+    )
+    assert audit.status_code == 200
+    actions = [item["action"] for item in audit.json()]
+    assert actions.count("config.create") == 2
+    assert "config.rollout" in actions
+    assert "config.rollback" in actions
+
+
+def test_longpoll_timeout_returns_204_when_no_matching_event_arrives(client):
+    response = client.get(
+        "/watch/longpoll",
+        headers=READER_HEADERS,
+        params={
+            "last_sequence": 0,
+            "config_name": "checkout-service.timeout",
+            "environment": "prod",
+            "target": "checkout-service",
+            "timeout": 0.05,
+        },
+    )
+    assert response.status_code == 204
+
+
+def test_metrics_endpoint_exposes_benchmark_metrics(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 2500).status_code == 201
+
+    with client.websocket_connect(
+        "/watch/ws?config_name=checkout-service.timeout&environment=prod&target=checkout-service",
+        headers=READER_HEADERS,
+    ) as websocket:
+        websocket.receive_json()
+        rollout = client.post(
+            "/configs/checkout-service.timeout/rollout",
+            headers=ADMIN_HEADERS,
+            json={"target": "checkout-service", "environment": "prod", "percent": 10},
+        )
+        assert rollout.status_code == 200, rollout.text
+        event = websocket.receive_json()
+        assert event["event"] == "rollout_started"
+
+    longpoll = client.get(
+        "/watch/longpoll",
+        headers=READER_HEADERS,
+        params={
+            "last_sequence": 0,
+            "config_name": "checkout-service.timeout",
+            "environment": "prod",
+            "target": "checkout-service",
+            "timeout": 0.1,
+        },
+    )
+    assert longpoll.status_code == 200, longpoll.text
+
+    resolved = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"version": "resolved", "environment": "prod", "target": "checkout-service", "client_id": "metrics-client"},
+    )
+    assert resolved.status_code == 200
+
+    rollback = client.post(
+        "/configs/checkout-service.timeout/rollback",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "target_version": 1},
+    )
+    assert rollback.status_code == 200, rollback.text
+
+    metrics = client.get("/metrics")
+    assert metrics.status_code == 200
+    body = metrics.text
+    assert "config_service_config_fetch_total" in body
+    assert "config_service_config_publish_total" in body
+    assert "config_service_config_rollback_total" in body
+    assert "config_service_config_fetch_latency_seconds_bucket" in body
+    assert "config_service_config_publish_latency_seconds_bucket" in body
+    assert "config_service_config_delivery_latency_seconds_bucket" in body
+    assert "config_service_websocket_updates_total" in body
+    assert "config_service_longpoll_updates_total" in body
+
+
+def test_manual_rollback_after_immediate_promotion_returns_valid_response(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 2600).status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 100},
+    )
+    assert rollout.status_code == 200, rollout.text
+    assert rollout.json()["status"] == "promoted"
+
+    rollback = client.post(
+        "/configs/checkout-service.timeout/rollback",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "target_version": 1},
+    )
+    assert rollback.status_code == 200, rollback.text
+    assert rollback.json()["status"] == "rolled_back"
+    assert rollback.json()["rollout_id"].startswith("manual-checkout-service.timeout-prod-checkout-service-1")
+    assert rollback.json()["created_at"]

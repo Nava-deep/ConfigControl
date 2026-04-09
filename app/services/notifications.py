@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from app.core.metrics import ACTIVE_WEBSOCKETS, DELIVERY_EVENTS
+from app.core.metrics import ACTIVE_WEBSOCKETS, CONFIG_DELIVERY_LATENCY, DELIVERY_EVENTS, LONGPOLL_UPDATES_TOTAL, WEBSOCKET_UPDATES_TOTAL
 
 
 @dataclass
@@ -65,8 +65,11 @@ class NotificationHub:
             try:
                 await subscription.websocket.send_json(event)
                 DELIVERY_EVENTS.labels("websocket", "sent").inc()
+                WEBSOCKET_UPDATES_TOTAL.labels("sent").inc()
+                self._observe_delivery_latency(event, "websocket", "sent")
             except Exception:
                 DELIVERY_EVENTS.labels("websocket", "error").inc()
+                WEBSOCKET_UPDATES_TOTAL.labels("error").inc()
                 stale.append(subscription)
         for subscription in stale:
             await self.unregister(subscription.websocket)
@@ -86,16 +89,20 @@ class NotificationHub:
             for event in self._events:
                 if event["sequence"] > last_sequence and self._matches(event, config_name, environment, target):
                     DELIVERY_EVENTS.labels("longpoll", "sent").inc()
+                    LONGPOLL_UPDATES_TOTAL.labels("sent").inc()
+                    self._observe_delivery_latency(event, "longpoll", "sent")
                     return event
             remaining = deadline - loop.time()
             if remaining <= 0:
                 DELIVERY_EVENTS.labels("longpoll", "timeout").inc()
+                LONGPOLL_UPDATES_TOTAL.labels("timeout").inc()
                 return None
             try:
                 async with self._condition:
                     await asyncio.wait_for(self._condition.wait(), timeout=remaining)
             except TimeoutError:
                 DELIVERY_EVENTS.labels("longpoll", "timeout").inc()
+                LONGPOLL_UPDATES_TOTAL.labels("timeout").inc()
                 return None
 
     @staticmethod
@@ -107,3 +114,15 @@ class NotificationHub:
         if target and event.get("target") != target:
             return False
         return True
+
+    @staticmethod
+    def _observe_delivery_latency(event: dict[str, Any], transport: str, outcome: str) -> None:
+        published_at = event.get("published_at") or event.get("timestamp")
+        if not isinstance(published_at, str):
+            return
+        published_at_dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        if published_at_dt.tzinfo is None:
+            published_at_dt = published_at_dt.replace(tzinfo=timezone.utc)
+        latency = (datetime.now(timezone.utc) - published_at_dt).total_seconds()
+        if latency >= 0:
+            CONFIG_DELIVERY_LATENCY.labels(transport, outcome).observe(latency)

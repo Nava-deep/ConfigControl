@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -10,7 +11,17 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.metrics import CONFIG_FETCHES, CONFIG_MUTATIONS, ROLLOUT_EVENTS, VALIDATION_FAILURES
+from app.core.metrics import (
+    CONFIG_FETCHES,
+    CONFIG_FETCH_LATENCY,
+    CONFIG_FETCH_TOTAL,
+    CONFIG_MUTATIONS,
+    CONFIG_PUBLISH_LATENCY,
+    CONFIG_PUBLISH_TOTAL,
+    CONFIG_ROLLBACK_TOTAL,
+    ROLLOUT_EVENTS,
+    VALIDATION_FAILURES,
+)
 from app.core.security import Actor
 from app.core.settings import Settings
 from app.db.models import AuditLog, ConfigAssignment, ConfigVersion, Rollout
@@ -58,119 +69,127 @@ class ConfigService:
         self.notifications = notifications
 
     async def create_config(self, payload: ConfigCreateRequest, actor: Actor) -> ConfigVersionResponse:
+        started = time.perf_counter()
+        result = "error"
         warnings: list[str] = []
-        for _ in range(3):
-            with self.database.session() as session:
-                latest = self._get_latest_version(session, payload.name, payload.environment)
-                schema = payload.schema_ or (latest.schema if latest else None)
-                if schema is None:
-                    VALIDATION_FAILURES.labels("create", payload.environment).inc()
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail="schema is required for the first config version",
-                    )
-                try:
-                    validate_schema(schema)
-                    issues = validate_payload(payload.value, schema)
-                except Exception as exc:
-                    VALIDATION_FAILURES.labels("create", payload.environment).inc()
-                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-                if issues:
-                    VALIDATION_FAILURES.labels("create", payload.environment).inc()
-                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=issues)
-                if latest and payload.schema_ and payload.schema_ != latest.schema:
-                    compatibility = self._compatibility_report(session, payload.name, payload.schema_, payload.environment)
-                    if compatibility["incompatible_versions"]:
-                        warnings.append(
-                            "new schema is incompatible with prior versions: "
-                            + ", ".join(str(v) for v in compatibility["incompatible_versions"])
+        try:
+            for _ in range(3):
+                with self.database.session() as session:
+                    latest = self._get_latest_version(session, payload.name, payload.environment)
+                    schema = payload.schema_ or (latest.schema if latest else None)
+                    if schema is None:
+                        VALIDATION_FAILURES.labels("create", payload.environment).inc()
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail="schema is required for the first config version",
                         )
-                next_version = (latest.version + 1) if latest else 1
-                if latest:
-                    latest.is_latest = False
-                record = ConfigVersion(
-                    name=payload.name,
-                    environment=payload.environment,
-                    version=next_version,
-                    value=payload.value,
-                    schema=schema,
-                    labels=payload.labels,
-                    description=payload.description,
-                    created_by=actor.user_id,
-                    is_latest=True,
-                )
-                session.add(record)
-                activation_target = None
-                activated = False
-                try:
-                    if next_version == 1:
-                        activation_target = self.infer_target(payload.name)
-                        session.add(
-                            ConfigAssignment(
-                                config_name=payload.name,
-                                environment=payload.environment,
-                                target=activation_target,
-                                stable_version=next_version,
+                    try:
+                        validate_schema(schema)
+                        issues = validate_payload(payload.value, schema)
+                    except Exception as exc:
+                        VALIDATION_FAILURES.labels("create", payload.environment).inc()
+                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+                    if issues:
+                        VALIDATION_FAILURES.labels("create", payload.environment).inc()
+                        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=issues)
+                    if latest and payload.schema_ and payload.schema_ != latest.schema:
+                        compatibility = self._compatibility_report(session, payload.name, payload.schema_, payload.environment)
+                        if compatibility["incompatible_versions"]:
+                            warnings.append(
+                                "new schema is incompatible with prior versions: "
+                                + ", ".join(str(v) for v in compatibility["incompatible_versions"])
                             )
+                    next_version = (latest.version + 1) if latest else 1
+                    if latest:
+                        latest.is_latest = False
+                    record = ConfigVersion(
+                        name=payload.name,
+                        environment=payload.environment,
+                        version=next_version,
+                        value=payload.value,
+                        schema=schema,
+                        labels=payload.labels,
+                        description=payload.description,
+                        created_by=actor.user_id,
+                        is_latest=True,
+                    )
+                    session.add(record)
+                    activation_target = None
+                    activated = False
+                    try:
+                        if next_version == 1:
+                            activation_target = self.infer_target(payload.name)
+                            session.add(
+                                ConfigAssignment(
+                                    config_name=payload.name,
+                                    environment=payload.environment,
+                                    target=activation_target,
+                                    stable_version=next_version,
+                                )
+                            )
+                            activated = True
+                        self._create_audit(
+                            session,
+                            actor=actor,
+                            action="config.create",
+                            config_name=payload.name,
+                            environment=payload.environment,
+                            version=next_version,
+                            details={
+                                "description": payload.description,
+                                "labels": payload.labels,
+                                "activated": activated,
+                                "schema_changed": payload.schema_ is not None and bool(latest),
+                            },
                         )
-                        activated = True
-                    self._create_audit(
-                        session,
-                        actor=actor,
-                        action="config.create",
-                        config_name=payload.name,
-                        environment=payload.environment,
-                        version=next_version,
-                        details={
-                            "description": payload.description,
-                            "labels": payload.labels,
-                            "activated": activated,
-                            "schema_changed": payload.schema_ is not None and bool(latest),
+                        session.commit()
+                    except IntegrityError:
+                        session.rollback()
+                        continue
+                    self._cache_version(record)
+                    CONFIG_MUTATIONS.labels("create", payload.environment).inc()
+                    logger.info(
+                        "config version created",
+                        extra={
+                            "event": "config.create",
+                            "context": {
+                                "config_name": payload.name,
+                                "environment": payload.environment,
+                                "version": next_version,
+                                "actor": actor.user_id,
+                                "activated": activated,
+                            },
                         },
                     )
-                    session.commit()
-                except IntegrityError:
-                    session.rollback()
-                    continue
-                self._cache_version(record)
-                CONFIG_MUTATIONS.labels("create", payload.environment).inc()
-                logger.info(
-                    "config version created",
-                    extra={
-                        "event": "config.create",
-                        "context": {
-                            "config_name": payload.name,
-                            "environment": payload.environment,
-                            "version": next_version,
-                            "actor": actor.user_id,
-                            "activated": activated,
-                        },
-                    },
-                )
-                if activated and activation_target:
-                    await self._publish_event(
-                        event="activated",
-                        config_name=payload.name,
-                        environment=payload.environment,
-                        target=activation_target,
-                        version=next_version,
-                        stable_version=next_version,
-                        reason="initial activation",
+                    if activated and activation_target:
+                        await self._publish_event(
+                            event="activated",
+                            config_name=payload.name,
+                            environment=payload.environment,
+                            target=activation_target,
+                            version=next_version,
+                            stable_version=next_version,
+                            reason="initial activation",
+                        )
+                    result = "success"
+                    return ConfigVersionResponse(
+                        config_id=record.config_id,
+                        name=record.name,
+                        environment=record.environment,
+                        version=record.version,
+                        labels=record.labels,
+                        description=record.description,
+                        created_by=record.created_by,
+                        created_at=record.created_at,
+                        active_target=activation_target,
+                        activated=activated,
+                        warnings=warnings,
                     )
-                return ConfigVersionResponse(
-                    config_id=record.config_id,
-                    name=record.name,
-                    environment=record.environment,
-                    version=record.version,
-                    labels=record.labels,
-                    description=record.description,
-                    created_by=record.created_by,
-                    created_at=record.created_at,
-                    active_target=activation_target,
-                    activated=activated,
-                    warnings=warnings,
-                )
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="concurrent version creation conflict")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="concurrent version creation conflict")
+        finally:
+            duration = time.perf_counter() - started
+            CONFIG_PUBLISH_TOTAL.labels(payload.environment, result).inc()
+            CONFIG_PUBLISH_LATENCY.labels(payload.environment, result).observe(duration)
 
     def list_configs(self, environment: EnvironmentName | None = None) -> list[ConfigSummary]:
         with self.database.session() as session:
@@ -255,8 +274,10 @@ class ConfigService:
         client_id: str | None,
         environment: EnvironmentName,
     ) -> ConfigReadResponse:
+        started = time.perf_counter()
         resolved_target = target or self.infer_target(name)
         source = "stable"
+        result = "error"
         try:
             if version is None or version == "resolved":
                 with self.database.session() as session:
@@ -273,14 +294,18 @@ class ConfigService:
                         source = "canary"
                     cached_payload = self._get_cached_version_payload(name, environment, resolved_version)
                     if cached_payload is not None:
-                        CONFIG_FETCHES.labels(source, environment, "success").inc()
+                        result = "success"
+                        CONFIG_FETCHES.labels(source, environment, result).inc()
+                        CONFIG_FETCH_TOTAL.labels(source, environment, result).inc()
                         return self._payload_to_read_response(cached_payload, target=resolved_target, source=source)
                     record = self._get_version(session, name, environment, resolved_version)
             elif version == "latest":
                 source = "latest"
                 cached_payload = self.cache.get_json(self._latest_cache_key(name, environment))
                 if cached_payload is not None:
-                    CONFIG_FETCHES.labels(source, environment, "success").inc()
+                    result = "success"
+                    CONFIG_FETCHES.labels(source, environment, result).inc()
+                    CONFIG_FETCH_TOTAL.labels(source, environment, result).inc()
                     return self._payload_to_read_response(cached_payload, target=resolved_target, source=source)
                 with self.database.session() as session:
                     record = self._get_latest_version(session, name, environment)
@@ -301,28 +326,36 @@ class ConfigService:
                     ) from exc
                 cached_payload = self._get_cached_version_payload(name, environment, version_int)
                 if cached_payload is not None:
-                    CONFIG_FETCHES.labels(source, environment, "success").inc()
+                    result = "success"
+                    CONFIG_FETCHES.labels(source, environment, result).inc()
+                    CONFIG_FETCH_TOTAL.labels(source, environment, result).inc()
                     return self._payload_to_read_response(cached_payload, target=resolved_target, source=source)
                 with self.database.session() as session:
                     record = self._get_version(session, name, environment, version_int)
                     self._cache_version(record)
-                response = ConfigReadResponse(
-                    name=record.name,
-                    environment=record.environment,
-                    version=record.version,
-                    target=resolved_target,
-                    source=source,
-                    description=record.description,
-                    labels=record.labels,
-                    value=record.value,
-                    schema_=record.schema,
-                    created_at=record.created_at,
-                )
-                CONFIG_FETCHES.labels(source, environment, "success").inc()
-                return response
+            result = "success"
+            response = ConfigReadResponse(
+                name=record.name,
+                environment=record.environment,
+                version=record.version,
+                target=resolved_target,
+                source=source,
+                description=record.description,
+                labels=record.labels,
+                value=record.value,
+                schema_=record.schema,
+                created_at=record.created_at,
+            )
+            CONFIG_FETCHES.labels(source, environment, result).inc()
+            CONFIG_FETCH_TOTAL.labels(source, environment, result).inc()
+            return response
         except HTTPException:
-            CONFIG_FETCHES.labels(source, environment, "error").inc()
+            CONFIG_FETCHES.labels(source, environment, result).inc()
+            CONFIG_FETCH_TOTAL.labels(source, environment, result).inc()
             raise
+        finally:
+            duration = time.perf_counter() - started
+            CONFIG_FETCH_LATENCY.labels(source, environment, result).observe(duration)
 
     async def start_rollout(self, name: str, payload: RolloutRequest, actor: Actor) -> RolloutResponse:
         with self.database.session() as session:
@@ -440,76 +473,86 @@ class ConfigService:
         actor: Actor,
         reason: str = "manual rollback",
     ) -> RolloutResponse:
+        started = time.perf_counter()
+        result = "error"
         target = payload.target or self.infer_target(name)
-        with self.database.session() as session:
-            version = self._get_version(session, name, payload.environment, payload.target_version)
-            assignment = self._get_or_create_assignment(session, name, target, payload.environment)
-            previous_stable = assignment.stable_version
-            active_rollout = self._get_active_rollout(session, name, target, payload.environment)
-            if active_rollout:
-                active_rollout.status = "rolled_back"
-                active_rollout.rollback_reason = reason
-            assignment.stable_version = version.version
-            rollback_view = active_rollout or Rollout(
+        try:
+            with self.database.session() as session:
+                version = self._get_version(session, name, payload.environment, payload.target_version)
+                assignment = self._get_or_create_assignment(session, name, target, payload.environment)
+                previous_stable = assignment.stable_version
+                active_rollout = self._get_active_rollout(session, name, target, payload.environment)
+                if active_rollout:
+                    active_rollout.status = "rolled_back"
+                    active_rollout.rollback_reason = reason
+                assignment.stable_version = version.version
+                rollback_view = active_rollout or Rollout(
+                    config_name=name,
+                    environment=payload.environment,
+                    target=target,
+                    from_version=previous_stable,
+                    to_version=version.version,
+                    percent=0,
+                    status="rolled_back",
+                    created_by=actor.user_id,
+                    rollback_reason=reason,
+                )
+                self._create_audit(
+                    session,
+                    actor=actor,
+                    action="config.rollback",
+                    config_name=name,
+                    environment=payload.environment,
+                    version=version.version,
+                    details={"target": target, "reason": reason},
+                )
+                session.commit()
+                ROLLOUT_EVENTS.labels("rolled_back", payload.environment).inc()
+            logger.info(
+                "config rolled back",
+                extra={
+                    "event": "config.rollback",
+                    "context": {
+                        "config_name": name,
+                        "environment": payload.environment,
+                        "target": target,
+                        "actor": actor.user_id,
+                        "from_version": previous_stable,
+                        "to_version": version.version,
+                        "reason": reason,
+                    },
+                },
+            )
+            await self._publish_event(
+                event="rollback",
                 config_name=name,
                 environment=payload.environment,
                 target=target,
-                from_version=previous_stable,
+                version=version.version,
+                stable_version=version.version,
+                rollout_percent=0,
+                rollout_id=getattr(active_rollout, "rollout_id", None),
+                reason=reason,
+            )
+            result = "success"
+            rollback_id = getattr(rollback_view, "rollout_id", None) or (
+                f"manual-{name}-{payload.environment}-{target}-{version.version}"
+            )
+            rollback_created_at = getattr(rollback_view, "created_at", None) or datetime.now(timezone.utc)
+            return RolloutResponse(
+                rollout_id=rollback_id,
+                config_name=name,
+                environment=payload.environment,
+                target=target,
+                from_version=getattr(rollback_view, "from_version", version.version),
                 to_version=version.version,
                 percent=0,
                 status="rolled_back",
-                created_by=actor.user_id,
+                created_at=rollback_created_at,
                 rollback_reason=reason,
             )
-            self._create_audit(
-                session,
-                actor=actor,
-                action="config.rollback",
-                config_name=name,
-                environment=payload.environment,
-                version=version.version,
-                details={"target": target, "reason": reason},
-            )
-            session.commit()
-            ROLLOUT_EVENTS.labels("rolled_back", payload.environment).inc()
-        logger.info(
-            "config rolled back",
-            extra={
-                "event": "config.rollback",
-                "context": {
-                    "config_name": name,
-                    "environment": payload.environment,
-                    "target": target,
-                    "actor": actor.user_id,
-                    "from_version": previous_stable,
-                    "to_version": version.version,
-                    "reason": reason,
-                },
-            },
-        )
-        await self._publish_event(
-            event="rollback",
-            config_name=name,
-            environment=payload.environment,
-            target=target,
-            version=version.version,
-            stable_version=version.version,
-            rollout_percent=0,
-            rollout_id=getattr(active_rollout, "rollout_id", None),
-            reason=reason,
-        )
-        return RolloutResponse(
-            rollout_id=getattr(rollback_view, "rollout_id", f"manual-{name}-{payload.environment}-{target}-{version.version}"),
-            config_name=name,
-            environment=payload.environment,
-            target=target,
-            from_version=getattr(rollback_view, "from_version", version.version),
-            to_version=version.version,
-            percent=0,
-            status="rolled_back",
-            created_at=getattr(rollback_view, "created_at", datetime.now(timezone.utc)),
-            rollback_reason=reason,
-        )
+        finally:
+            CONFIG_ROLLBACK_TOTAL.labels(payload.environment, "manual", result).inc()
 
     async def manual_promote_rollout(self, name: str, rollout_id: str, actor: Actor) -> RolloutResponse:
         response = await self._promote_rollout(
@@ -553,6 +596,7 @@ class ConfigService:
             )
             session.commit()
             ROLLOUT_EVENTS.labels("rolled_back", rollout.environment).inc()
+            CONFIG_ROLLBACK_TOTAL.labels(rollout.environment, "auto", "success").inc()
             event = {
                 "config_name": rollout.config_name,
                 "environment": rollout.environment,
@@ -817,6 +861,7 @@ class ConfigService:
             "rollout_percent": rollout_percent,
             "rollout_id": rollout_id,
             "reason": reason,
+            "published_at": datetime.now(timezone.utc).isoformat(),
             "source_instance": self.settings.instance_id,
         }
         await self.notifications.publish(payload)

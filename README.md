@@ -99,6 +99,7 @@ What each component does:
 - Local orchestration: Docker Compose
 - Deployment examples: Kubernetes manifests
 - Testing: Pytest
+- Benchmarking: custom local perf harness
 
 ## Getting Started
 
@@ -150,6 +151,32 @@ make test-unit
 make test-integration
 make verify
 ```
+
+### 7. Run benchmarks
+
+Quick local benchmark run:
+
+```bash
+make bench-quick
+```
+
+Longer benchmark run for more stable numbers:
+
+```bash
+make bench
+```
+
+The benchmark harness:
+- starts the API locally with a temporary SQLite database
+- disables Redis so the run is reproducible on a single machine
+- measures publish, fetch, rollback, WebSocket delivery, long-poll delivery, long-poll timeout behavior, and small concurrent fetch load
+- writes machine-readable and copy-paste-friendly reports to:
+  - `perf/results/latest_results.json`
+  - `perf/results/latest_report.md`
+
+Resume-safe rule:
+- only use numbers that you measured yourself with the included benchmark commands
+- record the command, machine, and date alongside the result
 
 ## Example Usage
 
@@ -212,6 +239,36 @@ curl "http://localhost:8080/configs/checkout-service.timeout/diff?from_version=1
   -H "X-Role: reader"
 ```
 
+## Testing and Benchmarks
+
+Current automated coverage includes:
+- immutable version behavior
+- target-based resolution and deterministic canary selection
+- publish, promote, and rollback flows
+- schema validation success and failure paths
+- RBAC authorization checks
+- audit log creation
+- WebSocket and long-poll delivery
+- Redis fallback behavior in the cache layer
+- Redis fanout forwarding behavior in the event bridge
+- telemetry environment isolation and SDK fallback behavior
+
+What the benchmark suite measures:
+- config publish latency
+- resolved fetch latency
+- cached vs uncached fetch latency
+- rollback latency
+- WebSocket propagation latency
+- long-poll propagation latency
+- long-poll timeout behavior
+- small concurrent fetch latency under synthetic load
+
+How to interpret the output:
+- `average_ms` is the average latency across the benchmark samples
+- `p95_ms` shows tail latency for the slowest 5% of samples
+- `metrics_delta` shows which Prometheus counters moved during the run
+- the Markdown report is meant for quick review, and the JSON report is better for notes or future comparisons
+
 ## Design Decisions
 
 ### Why Redis?
@@ -243,6 +300,19 @@ curl "http://localhost:8080/configs/checkout-service.timeout/diff?from_version=1
 - If the control plane is temporarily unreachable, SDK clients keep using cached last-known-good config
 - Stable assignments and immutable versions make rollback quick and predictable
 
+Prometheus metrics now make the main control-plane behaviors measurable:
+- `config_service_config_fetch_total`
+- `config_service_config_publish_total`
+- `config_service_config_rollback_total`
+- `config_service_config_fetch_latency_seconds`
+- `config_service_config_publish_latency_seconds`
+- `config_service_config_delivery_latency_seconds`
+- `config_service_cache_hits_total`
+- `config_service_cache_misses_total`
+- `config_service_websocket_updates_total`
+- `config_service_longpoll_updates_total`
+- `config_service_redis_fallback_total`
+
 ## Future Improvements
 
 - Multi-region or region-aware configs
@@ -256,4 +326,4 @@ curl "http://localhost:8080/configs/checkout-service.timeout/diff?from_version=1
 
 - Built a centralized configuration control plane with 19 FastAPI endpoints, immutable version history, and environment-aware config resolution across `dev`, `staging`, and `prod`.
 - Implemented deterministic `1%` to `100%` canary rollouts with promotion, rollback, Redis-based fanout, and SDK last-known-good fallback to reduce the blast radius of bad config pushes.
-- Added production-style reliability features including RBAC audit logs, Prometheus metrics, Docker Compose, Kubernetes manifests, and 27 automated tests covering rollout, delivery, and failure scenarios.
+- Added production-style reliability features including RBAC audit logs, Prometheus metrics, Docker Compose, Kubernetes manifests, a reproducible benchmark harness, and 37 automated tests covering rollout, delivery, and failure scenarios.

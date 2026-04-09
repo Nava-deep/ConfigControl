@@ -5,3 +5,6 @@ __pycache__/
 .cache/
 config_service.db
 .DS_Store
+perf/results/*.json
+perf/results/*.md
+!perf/results/.gitkeep

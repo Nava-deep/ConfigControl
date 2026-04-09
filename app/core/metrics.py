@@ -30,6 +30,31 @@ CONFIG_FETCHES = Counter(
     "Config fetches by source and result.",
     ["source", "environment", "result"],
 )
+CONFIG_FETCH_TOTAL = Counter(
+    "config_service_config_fetch_total",
+    "Total config fetch operations by source, environment, and result.",
+    ["source", "environment", "result"],
+)
+CONFIG_FETCH_LATENCY = Histogram(
+    "config_service_config_fetch_latency_seconds",
+    "Latency of config fetch operations.",
+    ["source", "environment", "result"],
+)
+CONFIG_PUBLISH_TOTAL = Counter(
+    "config_service_config_publish_total",
+    "Total config publish operations.",
+    ["environment", "result"],
+)
+CONFIG_PUBLISH_LATENCY = Histogram(
+    "config_service_config_publish_latency_seconds",
+    "Latency of config publish operations.",
+    ["environment", "result"],
+)
+CONFIG_ROLLBACK_TOTAL = Counter(
+    "config_service_config_rollback_total",
+    "Total config rollback operations.",
+    ["environment", "trigger", "result"],
+)
 VALIDATION_FAILURES = Counter(
     "config_service_validation_failures_total",
     "Validation failures by operation.",
@@ -50,6 +75,21 @@ CACHE_EVENTS = Counter(
     "Cache and fallback behavior by backend, operation, and outcome.",
     ["backend", "operation", "outcome"],
 )
+CACHE_HITS_TOTAL = Counter(
+    "config_service_cache_hits_total",
+    "Total cache hits by backend.",
+    ["backend"],
+)
+CACHE_MISSES_TOTAL = Counter(
+    "config_service_cache_misses_total",
+    "Total cache misses by backend.",
+    ["backend"],
+)
+REDIS_FALLBACK_TOTAL = Counter(
+    "config_service_redis_fallback_total",
+    "Total times the service fell back after a Redis failure.",
+    ["operation"],
+)
 CLIENT_FAILURE_REPORTS = Counter(
     "config_service_client_failure_reports_total",
     "Anonymous client failure reports ingested by the control plane.",
@@ -67,6 +107,21 @@ STARTUP_DEPENDENCY_STATUS = Gauge(
     "config_service_startup_dependency_status",
     "Dependency status during startup checks.",
     ["dependency"],
+)
+WEBSOCKET_UPDATES_TOTAL = Counter(
+    "config_service_websocket_updates_total",
+    "Total websocket update attempts by outcome.",
+    ["outcome"],
+)
+LONGPOLL_UPDATES_TOTAL = Counter(
+    "config_service_longpoll_updates_total",
+    "Total long-poll update responses by outcome.",
+    ["outcome"],
+)
+CONFIG_DELIVERY_LATENCY = Histogram(
+    "config_service_config_delivery_latency_seconds",
+    "Latency from event publish to client delivery.",
+    ["transport", "outcome"],
 )
 
 

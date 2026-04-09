@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, WebSocketException, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.core.container import ServiceContainer
 from app.core.metrics import prometheus_metrics
@@ -271,7 +271,7 @@ async def longpoll(
         timeout=timeout or container.settings.longpoll_timeout_seconds,
     )
     if event is None:
-        return JSONResponse(status_code=status.HTTP_204_NO_CONTENT, content=None)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     return event
 
 
