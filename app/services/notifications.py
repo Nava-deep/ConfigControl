@@ -8,13 +8,14 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from app.core.metrics import ACTIVE_WEBSOCKETS
+from app.core.metrics import ACTIVE_WEBSOCKETS, DELIVERY_EVENTS
 
 
 @dataclass
 class Subscription:
     websocket: WebSocket
     config_name: str | None
+    environment: str | None
     target: str | None
 
 
@@ -25,9 +26,15 @@ class NotificationHub:
         self._condition = asyncio.Condition()
         self._sequence = 0
 
-    async def register(self, websocket: WebSocket, config_name: str | None, target: str | None) -> None:
+    async def register(
+        self,
+        websocket: WebSocket,
+        config_name: str | None,
+        environment: str | None,
+        target: str | None,
+    ) -> None:
         await websocket.accept()
-        self._subscriptions[id(websocket)] = Subscription(websocket, config_name, target)
+        self._subscriptions[id(websocket)] = Subscription(websocket, config_name, environment, target)
         ACTIVE_WEBSOCKETS.inc()
         await websocket.send_json(
             {
@@ -53,11 +60,13 @@ class NotificationHub:
             self._condition.notify_all()
         stale: list[Subscription] = []
         for subscription in list(self._subscriptions.values()):
-            if not self._matches(event, subscription.config_name, subscription.target):
+            if not self._matches(event, subscription.config_name, subscription.environment, subscription.target):
                 continue
             try:
                 await subscription.websocket.send_json(event)
+                DELIVERY_EVENTS.labels("websocket", "sent").inc()
             except Exception:
+                DELIVERY_EVENTS.labels("websocket", "error").inc()
                 stale.append(subscription)
         for subscription in stale:
             await self.unregister(subscription.websocket)
@@ -67,6 +76,7 @@ class NotificationHub:
         self,
         last_sequence: int,
         config_name: str | None = None,
+        environment: str | None = None,
         target: str | None = None,
         timeout: float = 25.0,
     ) -> dict[str, Any] | None:
@@ -74,20 +84,25 @@ class NotificationHub:
         deadline = loop.time() + timeout
         while True:
             for event in self._events:
-                if event["sequence"] > last_sequence and self._matches(event, config_name, target):
+                if event["sequence"] > last_sequence and self._matches(event, config_name, environment, target):
+                    DELIVERY_EVENTS.labels("longpoll", "sent").inc()
                     return event
             remaining = deadline - loop.time()
             if remaining <= 0:
+                DELIVERY_EVENTS.labels("longpoll", "timeout").inc()
                 return None
             try:
                 async with self._condition:
                     await asyncio.wait_for(self._condition.wait(), timeout=remaining)
             except TimeoutError:
+                DELIVERY_EVENTS.labels("longpoll", "timeout").inc()
                 return None
 
     @staticmethod
-    def _matches(event: dict[str, Any], config_name: str | None, target: str | None) -> bool:
+    def _matches(event: dict[str, Any], config_name: str | None, environment: str | None, target: str | None) -> bool:
         if config_name and event.get("config_name") != config_name:
+            return False
+        if environment and event.get("environment") != environment:
             return False
         if target and event.get("target") != target:
             return False

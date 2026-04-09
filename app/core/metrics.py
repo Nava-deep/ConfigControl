@@ -18,17 +18,42 @@ REQUEST_DURATION = Histogram(
 CONFIG_MUTATIONS = Counter(
     "config_service_config_mutations_total",
     "Config mutations by action.",
-    ["action"],
+    ["action", "environment"],
 )
 ROLLOUT_EVENTS = Counter(
     "config_service_rollout_events_total",
     "Rollout transitions by status.",
-    ["status"],
+    ["status", "environment"],
+)
+CONFIG_FETCHES = Counter(
+    "config_service_config_fetches_total",
+    "Config fetches by source and result.",
+    ["source", "environment", "result"],
+)
+VALIDATION_FAILURES = Counter(
+    "config_service_validation_failures_total",
+    "Validation failures by operation.",
+    ["operation", "environment"],
+)
+ROLLOUT_EVALUATIONS = Counter(
+    "config_service_rollout_evaluations_total",
+    "Background rollout evaluations by outcome.",
+    ["outcome", "environment"],
+)
+DELIVERY_EVENTS = Counter(
+    "config_service_delivery_events_total",
+    "Notification delivery events by transport and outcome.",
+    ["transport", "outcome"],
+)
+CACHE_EVENTS = Counter(
+    "config_service_cache_events_total",
+    "Cache and fallback behavior by backend, operation, and outcome.",
+    ["backend", "operation", "outcome"],
 )
 CLIENT_FAILURE_REPORTS = Counter(
     "config_service_client_failure_reports_total",
     "Anonymous client failure reports ingested by the control plane.",
-    ["target", "source"],
+    ["target", "source", "environment"],
 )
 ACTIVE_WEBSOCKETS = Gauge(
     "config_service_active_websockets",
@@ -37,6 +62,11 @@ ACTIVE_WEBSOCKETS = Gauge(
 REDIS_AVAILABLE = Gauge(
     "config_service_redis_available",
     "Whether Redis is reachable.",
+)
+STARTUP_DEPENDENCY_STATUS = Gauge(
+    "config_service_startup_dependency_status",
+    "Dependency status during startup checks.",
+    ["dependency"],
 )
 
 

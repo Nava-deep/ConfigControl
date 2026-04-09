@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 
+from app.core.metrics import STARTUP_DEPENDENCY_STATUS
 from app.core.settings import Settings, get_settings
 from app.db.session import Database, build_database
 from app.services.cache import CacheService
@@ -11,6 +13,8 @@ from app.services.config_service import ConfigService
 from app.services.event_bridge import RedisEventBridge
 from app.services.notifications import NotificationHub
 from app.services.telemetry import TelemetryService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,6 +68,22 @@ class ServiceContainer:
 
     async def startup(self) -> None:
         self.database.create_all()
+        database_ok = self.database.ping()
+        STARTUP_DEPENDENCY_STATUS.labels("database").set(1 if database_ok else 0)
+        if not database_ok:
+            raise RuntimeError("database dependency check failed during startup")
+        STARTUP_DEPENDENCY_STATUS.labels("redis").set(1 if self.cache.is_available() else 0)
+        logger.info(
+            "service startup checks complete",
+            extra={
+                "event": "startup.ready",
+                "context": {
+                    "database": database_ok,
+                    "redis": self.cache.is_available(),
+                    "instance_id": self.settings.instance_id,
+                },
+            },
+        )
         await self.event_bridge.start()
         await self.canary_monitor.start()
 
@@ -71,3 +91,4 @@ class ServiceContainer:
         await self.canary_monitor.stop()
         await self.event_bridge.stop()
         await asyncio.to_thread(self.database.dispose)
+        logger.info("service shutdown complete", extra={"event": "startup.shutdown", "context": {"instance_id": self.settings.instance_id}})

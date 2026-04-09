@@ -9,6 +9,7 @@ from app.core.security import Actor, get_actor, get_websocket_actor, require_rol
 from app.schemas.audit import AuditEntryResponse
 from app.schemas.config import (
     ConfigCreateRequest,
+    ConfigDiffResponse,
     ConfigReadResponse,
     ConfigSummary,
     ConfigVersionResponse,
@@ -62,8 +63,12 @@ async def metrics_endpoint():
 
 
 @router.get("/configs", response_model=list[ConfigSummary])
-async def list_configs(request: Request, _: Actor = Depends(get_actor)):
-    return container_from_request(request).config_service.list_configs()
+async def list_configs(
+    request: Request,
+    environment: str | None = Query(default=None),
+    _: Actor = Depends(get_actor),
+):
+    return container_from_request(request).config_service.list_configs(environment)
 
 
 @router.post("/configs", response_model=ConfigVersionResponse, status_code=status.HTTP_201_CREATED)
@@ -82,6 +87,7 @@ async def get_config(
     version: str | None = Query(default="resolved"),
     target: str | None = Query(default=None),
     client_id: str | None = Query(default=None),
+    environment: str = Query(default="prod"),
     _: Actor = Depends(get_actor),
 ):
     return container_from_request(request).config_service.get_config(
@@ -89,12 +95,35 @@ async def get_config(
         version=version,
         target=target,
         client_id=client_id,
+        environment=environment,
     )
 
 
 @router.get("/configs/{name}/versions", response_model=list[VersionHistoryEntry])
-async def get_versions(name: str, request: Request, _: Actor = Depends(get_actor)):
-    return container_from_request(request).config_service.list_versions(name)
+async def get_versions(
+    name: str,
+    request: Request,
+    environment: str = Query(default="prod"),
+    _: Actor = Depends(get_actor),
+):
+    return container_from_request(request).config_service.list_versions(name, environment)
+
+
+@router.get("/configs/{name}/diff", response_model=ConfigDiffResponse)
+async def diff_versions(
+    name: str,
+    request: Request,
+    from_version: int = Query(ge=1),
+    to_version: int = Query(ge=1),
+    environment: str = Query(default="prod"),
+    _: Actor = Depends(get_actor),
+):
+    return container_from_request(request).config_service.diff_versions(
+        name=name,
+        environment=environment,
+        from_version=from_version,
+        to_version=to_version,
+    )
 
 
 @router.post("/configs/{name}/rollout", response_model=RolloutResponse)
@@ -141,9 +170,10 @@ async def dry_run_schema_migration(
 async def get_audit(
     request: Request,
     name: str | None = Query(default=None),
+    environment: str | None = Query(default=None),
     _: Actor = Depends(require_role("admin", "operator", "reader")),
 ):
-    return container_from_request(request).config_service.list_audit_logs(name)
+    return container_from_request(request).config_service.list_audit_logs(name, environment)
 
 
 @router.post("/simulation/metrics", response_model=SimulationMetricResponse)
@@ -168,6 +198,7 @@ async def ingest_failure_telemetry(
 async def list_failure_telemetry(
     request: Request,
     config_name: str | None = Query(default=None),
+    environment: str | None = Query(default=None),
     target: str | None = Query(default=None),
     source: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
@@ -175,6 +206,7 @@ async def list_failure_telemetry(
 ):
     return container_from_request(request).telemetry_service.list_failures(
         config_name=config_name,
+        environment=environment,
         target=target,
         source=source,
         limit=limit,
@@ -185,6 +217,7 @@ async def list_failure_telemetry(
 async def summarize_failure_telemetry(
     request: Request,
     config_name: str | None = Query(default=None),
+    environment: str | None = Query(default=None),
     target: str | None = Query(default=None),
     window_minutes: int = Query(default=60, ge=1, le=10080),
     limit: int = Query(default=50, ge=1, le=200),
@@ -192,6 +225,7 @@ async def summarize_failure_telemetry(
 ):
     return container_from_request(request).telemetry_service.summarize_failures(
         config_name=config_name,
+        environment=environment,
         target=target,
         window_minutes=window_minutes,
         limit=limit,
@@ -203,6 +237,7 @@ async def longpoll(
     request: Request,
     last_sequence: int = Query(default=0, ge=0),
     config_name: str | None = Query(default=None),
+    environment: str | None = Query(default=None),
     target: str | None = Query(default=None),
     timeout: float | None = Query(default=None, gt=0),
     actor: Actor = Depends(get_actor),
@@ -216,6 +251,7 @@ async def longpoll(
     event = await container.notifications.poll(
         last_sequence=last_sequence,
         config_name=config_name,
+        environment=environment,
         target=target,
         timeout=timeout or container.settings.longpoll_timeout_seconds,
     )
@@ -229,13 +265,19 @@ async def websocket_watch(websocket: WebSocket):
     container = container_from_ws(websocket)
     actor = get_websocket_actor(websocket)
     config_name = websocket.query_params.get("config_name")
+    environment = websocket.query_params.get("environment")
     target = websocket.query_params.get("target")
     if actor.role == "reader" and not (config_name or target):
         raise WebSocketException(
             code=status.WS_1008_POLICY_VIOLATION,
             reason="reader websocket subscriptions must scope by config_name or target",
         )
-    await container.notifications.register(websocket, config_name=config_name, target=target)
+    await container.notifications.register(
+        websocket,
+        config_name=config_name,
+        environment=environment,
+        target=target,
+    )
     try:
         while True:
             await websocket.receive_text()

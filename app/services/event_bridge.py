@@ -6,6 +6,7 @@ import logging
 
 import redis
 
+from app.core.metrics import DELIVERY_EVENTS
 from app.core.settings import Settings
 from app.services.cache import CacheService
 from app.services.notifications import NotificationHub
@@ -52,10 +53,12 @@ class RedisEventBridge:
                     payload = json.loads(message["data"])
                     if payload.get("source_instance") == self.settings.instance_id:
                         continue
+                    DELIVERY_EVENTS.labels("redis_pubsub", "received").inc()
                     await self.notifications.publish(payload)
             except redis.RedisError as exc:
                 logger.warning("redis event bridge disconnected: %s", exc)
                 self.cache._set_available(False)  # noqa: SLF001
+                DELIVERY_EVENTS.labels("redis_pubsub", "error").inc()
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=1.0)
                 except TimeoutError:

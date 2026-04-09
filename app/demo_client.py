@@ -17,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Example microservice that hot-reloads config over websocket.")
     parser.add_argument("--base-url", default="http://localhost:8080")
     parser.add_argument("--name", default="checkout-service.timeout")
+    parser.add_argument("--environment", default="prod", choices=["dev", "staging", "prod"])
     parser.add_argument("--target", default="checkout-service")
     parser.add_argument("--client-id", default="demo-client-a")
     parser.add_argument("--ttl", type=int, default=30)
@@ -31,6 +32,7 @@ async def run() -> None:
         base_url=args.base_url,
         client_id=args.client_id,
         target=args.target,
+        environment=args.environment,
         ttl_seconds=args.ttl,
     )
     try:

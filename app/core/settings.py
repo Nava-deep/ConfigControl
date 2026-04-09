@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Config Control Plane"
     environment: str = "development"
+    log_level: str = "INFO"
     host: str = "0.0.0.0"
     port: int = 8080
     database_url: str = "sqlite:///./config_service.db"
