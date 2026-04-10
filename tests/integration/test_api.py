@@ -97,6 +97,20 @@ def test_reader_cannot_mutate_configs(client):
     assert response.status_code == 403
 
 
+def test_first_version_requires_schema(client):
+    response = client.post(
+        "/configs",
+        headers=ADMIN_HEADERS,
+        json={
+            "name": "checkout-service.timeout",
+            "environment": "prod",
+            "value": {"timeout_ms": 1000},
+        },
+    )
+    assert response.status_code == 422
+    assert "schema is required for the first config version" in response.text
+
+
 def test_websocket_receives_rollout_event_and_canary_resolution(client):
     assert create_version(client, 2000).status_code == 201
     assert create_version(client, 2500).status_code == 201
@@ -257,6 +271,30 @@ def test_partial_rollout_can_be_promoted_manually(client):
     assert resolved.json()["source"] == "stable"
 
 
+def test_list_configs_respects_environment_filter_and_stable_version(client):
+    assert create_version(client, 2000, environment="prod").status_code == 201
+    assert create_version(client, 3500, environment="prod").status_code == 201
+    assert create_version(client, 9000, environment="staging").status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 100},
+    )
+    assert rollout.status_code == 200, rollout.text
+
+    response = client.get("/configs", headers=READER_HEADERS, params={"environment": "prod"})
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["name"] == "checkout-service.timeout"
+    assert body[0]["environment"] == "prod"
+    assert body[0]["latest_version"] == 2
+    assert body[0]["stable_target"] == "checkout-service"
+    assert body[0]["stable_version"] == 2
+    assert body[0]["updated_at"]
+
+
 def test_invalid_version_query_returns_422(client):
     assert create_version(client, 2000).status_code == 201
     response = client.get(
@@ -393,6 +431,35 @@ def test_diff_endpoint_returns_field_level_changes(client):
     assert {item["path"] for item in diff.json()["changes"]} == {"retry_budget", "timeout_ms"}
 
 
+def test_dry_run_schema_migration_reports_incompatible_versions(client):
+    assert create_version(client, 2000, environment="prod").status_code == 201
+    assert create_version(client, 2500, environment="prod").status_code == 201
+
+    response = client.post(
+        "/configs/checkout-service.timeout/schema/dry-run",
+        headers=ADMIN_HEADERS,
+        json={
+            "environment": "prod",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "timeout_ms": {"type": "integer", "minimum": 1},
+                    "retry_budget": {"type": "integer", "minimum": 0},
+                },
+                "required": ["timeout_ms", "retry_budget"],
+                "additionalProperties": False,
+            },
+            "value": {"timeout_ms": 2500, "retry_budget": 3},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["candidate_value_valid"] is True
+    assert response.json()["current_versions_checked"] == 2
+    assert response.json()["compatible_versions"] == []
+    assert response.json()["incompatible_versions"] == [1, 2]
+    assert "version 1" in response.json()["issues"][0]
+
+
 def test_longpoll_returns_scoped_rollout_event(client):
     assert create_version(client, 2000, environment="staging").status_code == 201
     assert create_version(client, 3000, environment="staging").status_code == 201
@@ -440,6 +507,64 @@ def test_hundred_percent_rollout_promotes_immediately(client):
     assert resolved.status_code == 200
     assert resolved.json()["version"] == 2
     assert resolved.json()["source"] == "stable"
+
+
+def test_hundred_percent_rollout_rejects_canary_check(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 6000).status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={
+            "target": "checkout-service",
+            "environment": "prod",
+            "percent": 100,
+            "canary_check": {"metric": "error_rate", "threshold": 0.05, "window": 5},
+        },
+    )
+    assert rollout.status_code == 422
+    assert "100% rollout cannot include canary_check" in rollout.text
+
+
+def test_rollout_rejects_second_active_rollout_for_same_target(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 2800).status_code == 201
+
+    first = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 10},
+    )
+    assert first.status_code == 200, first.text
+
+    second = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 20},
+    )
+    assert second.status_code == 409
+    assert "active rollout already exists" in second.text
+
+
+def test_rollout_rejects_when_latest_version_is_already_stable(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 2800).status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 100},
+    )
+    assert rollout.status_code == 200, rollout.text
+
+    duplicate = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 10},
+    )
+    assert duplicate.status_code == 409
+    assert "latest version is already stable" in duplicate.text
 
 
 def test_promote_non_active_rollout_returns_conflict(client):
@@ -536,6 +661,24 @@ def test_failure_telemetry_is_filtered_by_environment(client):
     assert len(staging_summary.json()) == 1
     assert prod_summary.json()[0]["environment"] == "prod"
     assert staging_summary.json()[0]["environment"] == "staging"
+
+
+def test_missing_config_endpoints_return_404(client):
+    get_response = client.get("/configs/missing.config", headers=READER_HEADERS)
+    versions_response = client.get("/configs/missing.config/versions", headers=READER_HEADERS)
+    dry_run_response = client.post(
+        "/configs/missing.config/schema/dry-run",
+        headers=ADMIN_HEADERS,
+        json={
+            "environment": "prod",
+            "schema": SCHEMA,
+            "value": {"timeout_ms": 2000},
+        },
+    )
+
+    assert get_response.status_code == 404
+    assert versions_response.status_code == 404
+    assert dry_run_response.status_code == 404
 
 
 def test_latest_read_uses_cached_payload_when_database_session_is_unavailable(client, monkeypatch):

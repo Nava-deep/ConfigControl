@@ -39,6 +39,15 @@ def test_cache_falls_back_to_memory_when_redis_get_fails():
     assert cache.is_available() is False
 
 
+def test_cache_returns_none_on_memory_miss_without_redis():
+    cache = CacheService(Settings(use_redis=False))
+
+    payload = cache.get_json("config:prod:checkout-service.timeout:version:missing")
+
+    assert payload is None
+    assert cache.is_available() is False
+
+
 def test_cache_preserves_memory_write_when_redis_set_fails():
     cache = CacheService(Settings(use_redis=False))
     cache.client = FailingRedisClient()
@@ -69,3 +78,15 @@ def test_cache_serves_memory_value_after_delayed_redis_get_failure():
     assert payload == {"version": 3}
     assert elapsed >= 0.018
     assert cache.is_available() is False
+
+
+def test_cache_metric_round_trip_uses_memory_store():
+    cache = CacheService(Settings(use_redis=False))
+
+    written = cache.set_metric("checkout-service", "error_rate", 0.02)
+    fetched = cache.get_metric("checkout-service", "error_rate")
+
+    assert written["target"] == "checkout-service"
+    assert written["metric"] == "error_rate"
+    assert fetched is not None
+    assert fetched["value"] == 0.02

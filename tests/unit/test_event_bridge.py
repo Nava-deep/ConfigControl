@@ -40,6 +40,18 @@ class FakeRedisClient:
 
 
 @pytest.mark.asyncio
+async def test_event_bridge_start_is_noop_without_redis_client():
+    settings = Settings(use_redis=False, instance_id="local-instance")
+    cache = CacheService(settings)
+    notifications = NotificationHub()
+    bridge = RedisEventBridge(settings=settings, cache=cache, notifications=notifications)
+
+    await bridge.start()
+
+    assert bridge._task is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_event_bridge_forwards_external_instance_messages(monkeypatch):
     pubsub = FakePubSub(
         [
@@ -121,3 +133,24 @@ async def test_event_bridge_ignores_same_instance_messages(monkeypatch):
 
     assert pubsub.closed is True
     assert stop_called is True
+
+
+@pytest.mark.asyncio
+async def test_event_bridge_stop_clears_running_task(monkeypatch):
+    settings = Settings(use_redis=False, instance_id="local-instance")
+    cache = CacheService(settings)
+    notifications = NotificationHub()
+    bridge = RedisEventBridge(settings=settings, cache=cache, notifications=notifications)
+    cache.client = FakeRedisClient(FakePubSub([]))
+
+    async def fake_run():
+        await bridge._stop.wait()  # noqa: SLF001
+
+    monkeypatch.setattr(bridge, "_run", fake_run)
+
+    await bridge.start()
+    assert bridge._task is not None  # noqa: SLF001
+
+    await bridge.stop()
+
+    assert bridge._task is None  # noqa: SLF001

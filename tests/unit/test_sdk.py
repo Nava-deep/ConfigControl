@@ -94,6 +94,83 @@ def test_sdk_cache_is_scoped_by_requested_version(tmp_path, monkeypatch):
     client.close()
 
 
+def test_sdk_uses_fresh_cache_without_hitting_network(tmp_path, monkeypatch):
+    client = ConfigClient[TimeoutConfig](
+        base_url="http://config-service.local",
+        client_id="client-cache",
+        target="checkout-service",
+        ttl_seconds=30,
+        cache_dir=tmp_path,
+    )
+    client._save_cache(  # noqa: SLF001
+        "checkout-service.timeout",
+        "resolved",
+        {
+            "name": "checkout-service.timeout",
+            "version": 3,
+            "target": "checkout-service",
+            "source": "stable",
+            "value": {"timeout_ms": 1700},
+            "schema": {},
+            "description": None,
+            "created_at": "2026-03-30T00:00:00+00:00",
+        },
+    )
+
+    def explode(*args, **kwargs):
+        raise AssertionError("fresh cache should avoid a network request")
+
+    monkeypatch.setattr(client._client, "get", explode)  # noqa: SLF001
+    config = client.get_typed("checkout-service.timeout", TimeoutConfig)
+    assert config.timeout_ms == 1700
+    client.close()
+
+
+def test_sdk_refreshes_stale_cache_from_network(tmp_path, monkeypatch):
+    client = ConfigClient[TimeoutConfig](
+        base_url="http://config-service.local",
+        client_id="client-refresh",
+        target="checkout-service",
+        ttl_seconds=0,
+        cache_dir=tmp_path,
+    )
+    client._save_cache(  # noqa: SLF001
+        "checkout-service.timeout",
+        "resolved",
+        {
+            "name": "checkout-service.timeout",
+            "version": 1,
+            "target": "checkout-service",
+            "source": "stable",
+            "value": {"timeout_ms": 1500},
+            "schema": {},
+            "description": None,
+            "created_at": "2026-03-30T00:00:00+00:00",
+        },
+    )
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "name": "checkout-service.timeout",
+                "version": 2,
+                "target": "checkout-service",
+                "source": "stable",
+                "value": {"timeout_ms": 2500},
+                "schema": {},
+                "description": None,
+                "created_at": "2026-03-30T00:00:00+00:00",
+            }
+
+    monkeypatch.setattr(client._client, "get", lambda *args, **kwargs: DummyResponse())  # noqa: SLF001
+    config = client.get_typed("checkout-service.timeout", TimeoutConfig)
+    assert config.timeout_ms == 2500
+    client.close()
+
+
 def test_sdk_reports_anonymous_failure_payload(tmp_path, monkeypatch):
     client = ConfigClient[TimeoutConfig](
         base_url="http://config-service.local",
@@ -145,6 +222,59 @@ def test_sdk_reports_anonymous_failure_payload(tmp_path, monkeypatch):
     assert "stack_trace" in captured["json"]["metadata"]
     assert len(captured["json"]["fingerprint"]) == 32
     client.close()
+
+
+def test_sdk_sanitizes_failure_metadata_and_limits_fields(tmp_path):
+    client = ConfigClient[TimeoutConfig](
+        base_url="http://config-service.local",
+        client_id="client-sanitize",
+        target="checkout-service",
+        cache_dir=tmp_path,
+    )
+
+    sanitized = client._sanitize_failure_metadata(  # noqa: SLF001
+        {
+            "short_text": "ok",
+            "long_text": "x" * 150,
+            "numeric": 4,
+            "boolean": True,
+            "none_value": None,
+            "list_value": [1, 2, 3],
+            "dict_value": {"bad": "drop"},
+            "extra_1": "a",
+            "extra_2": "b",
+            "extra_3": "c",
+        }
+    )
+
+    assert sanitized["short_text"] == "ok"
+    assert sanitized["long_text"] == "x" * 120
+    assert sanitized["numeric"] == 4
+    assert sanitized["boolean"] is True
+    assert sanitized["none_value"] is None
+    assert "list_value" not in sanitized
+    assert "dict_value" not in sanitized
+    assert set(sanitized) == {"short_text", "long_text", "numeric", "boolean", "none_value", "extra_1"}
+    client.close()
+
+
+def test_sdk_installation_id_is_reused_across_client_instances(tmp_path):
+    first = ConfigClient[TimeoutConfig](
+        base_url="http://config-service.local",
+        client_id="client-install-a",
+        target="checkout-service",
+        cache_dir=tmp_path,
+    )
+    second = ConfigClient[TimeoutConfig](
+        base_url="http://config-service.local",
+        client_id="client-install-b",
+        target="checkout-service",
+        cache_dir=tmp_path,
+    )
+
+    assert first._anonymous_installation_id == second._anonymous_installation_id  # noqa: SLF001
+    first.close()
+    second.close()
 
 
 def test_sdk_cache_is_scoped_by_environment(tmp_path):

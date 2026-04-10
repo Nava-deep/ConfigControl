@@ -28,6 +28,11 @@ class PublishFailRedisClient:
         raise redis.RedisError(f"boom publishing {channel}")
 
 
+class ReadFailRedisClient(PublishFailRedisClient):
+    def get(self, key: str):
+        raise redis.RedisError(f"boom reading {key}")
+
+
 def create_version(client, value: int, *, environment: str = "prod"):
     return client.post(
         "/configs",
@@ -144,6 +149,44 @@ def test_longpoll_delivery_continues_when_redis_publish_fails(client):
     assert event.status_code == 200, event.text
     assert event.json()["event"] == "rollout_started"
     assert container.cache.is_available() is False
+
+
+def test_latest_read_uses_memory_fallback_when_redis_get_fails(client):
+    assert create_version(client, 2000).status_code == 201
+
+    container = client.app.state.container
+    container.cache.client = ReadFailRedisClient()
+    container.cache._set_available(True)  # noqa: SLF001
+
+    response = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"version": "latest", "environment": "prod"},
+    )
+    assert response.status_code == 200
+    assert response.json()["version"] == 1
+    assert response.json()["value"]["timeout_ms"] == 2000
+    assert container.cache.is_available() is False
+
+
+def test_metrics_record_publish_fallback_after_redis_publish_failure(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 3200).status_code == 201
+
+    container = client.app.state.container
+    container.cache.client = PublishFailRedisClient()
+    container.cache._set_available(True)  # noqa: SLF001
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 10},
+    )
+    assert rollout.status_code == 200, rollout.text
+
+    metrics = client.get("/metrics")
+    assert metrics.status_code == 200
+    assert 'config_service_redis_fallback_total{operation="publish"}' in metrics.text
 
 
 def test_rollback_succeeds_when_redis_publish_fails(client):
