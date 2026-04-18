@@ -737,6 +737,79 @@ def test_failure_telemetry_is_filtered_by_environment(client):
     assert staging_summary.json()[0]["environment"] == "staging"
 
 
+def test_failure_telemetry_list_filters_by_target_and_source(client):
+    assert create_version(client, 2000, environment="prod").status_code == 201
+
+    payloads = [
+        {"target": "checkout-service", "source": "demo-client", "fingerprint": "a" * 32},
+        {"target": "checkout-service", "source": "worker", "fingerprint": "b" * 32},
+        {"target": "payment-service", "source": "demo-client", "fingerprint": "c" * 32},
+    ]
+    for index, payload in enumerate(payloads, start=1):
+        response = client.post(
+            "/telemetry/failures",
+            headers=READER_HEADERS,
+            json={
+                "config_name": "checkout-service.timeout",
+                "environment": "prod",
+                "target": payload["target"],
+                "source": payload["source"],
+                "error_type": "RuntimeError",
+                "fingerprint": payload["fingerprint"],
+                "anonymous_installation_id": f"anon-installation-{index:016d}",
+                "config_version": 1,
+                "config_source": "stable",
+                "metadata": {},
+            },
+        )
+        assert response.status_code == 202, response.text
+
+    filtered = client.get(
+        "/telemetry/failures",
+        headers=ADMIN_HEADERS,
+        params={"target": "checkout-service", "source": "worker", "limit": 20},
+    )
+    assert filtered.status_code == 200
+    body = filtered.json()
+    assert len(body) == 1
+    assert body[0]["target"] == "checkout-service"
+    assert body[0]["source"] == "worker"
+
+
+def test_failure_summary_groups_by_fingerprint_and_installation_count(client):
+    assert create_version(client, 2000, environment="prod").status_code == 201
+
+    for installation in ("anon-installation-11111111", "anon-installation-22222222"):
+        response = client.post(
+            "/telemetry/failures",
+            headers=READER_HEADERS,
+            json={
+                "config_name": "checkout-service.timeout",
+                "environment": "prod",
+                "target": "checkout-service",
+                "source": "demo-client",
+                "error_type": "RuntimeError",
+                "fingerprint": "f" * 32,
+                "anonymous_installation_id": installation,
+                "config_version": 1,
+                "config_source": "stable",
+                "metadata": {},
+            },
+        )
+        assert response.status_code == 202, response.text
+
+    summary = client.get(
+        "/telemetry/failures/summary",
+        headers=ADMIN_HEADERS,
+        params={"config_name": "checkout-service.timeout", "environment": "prod", "window_minutes": 60},
+    )
+    assert summary.status_code == 200
+    top = summary.json()[0]
+    assert top["fingerprint"] == "f" * 32
+    assert top["event_count"] == 2
+    assert top["distinct_installations"] == 2
+
+
 def test_missing_config_endpoints_return_404(client):
     get_response = client.get("/configs/missing.config", headers=READER_HEADERS)
     versions_response = client.get("/configs/missing.config/versions", headers=READER_HEADERS)
