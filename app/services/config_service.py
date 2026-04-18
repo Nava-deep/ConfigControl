@@ -37,6 +37,7 @@ from app.schemas.config import (
     DryRunMigrationRequest,
     DryRunMigrationResponse,
     EnvironmentName,
+    RolloutAdvanceRequest,
     RollbackRequest,
     RolloutRequest,
     RolloutResponse,
@@ -565,6 +566,98 @@ class ConfigService:
         )
         if response is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"rollout '{rollout_id}' not found")
+        return response
+
+    async def advance_rollout(
+        self,
+        name: str,
+        rollout_id: str,
+        payload: RolloutAdvanceRequest,
+        actor: Actor,
+    ) -> RolloutResponse:
+        if payload.percent == 100:
+            with self.database.session() as session:
+                rollout = session.get(Rollout, rollout_id)
+                if rollout is None or rollout.config_name != name:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"rollout '{rollout_id}' not found")
+                if rollout.status != "active":
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"rollout '{rollout_id}' is not active",
+                    )
+                if payload.percent <= rollout.percent:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="advanced percent must be greater than the current rollout percent",
+                    )
+                rollout.percent = 100
+                session.commit()
+            response = await self._promote_rollout(
+                rollout_id,
+                actor=actor,
+                action="config.rollout.advance",
+                reason="advanced to 100% stable",
+                expected_config_name=name,
+                strict=True,
+            )
+            if response is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"rollout '{rollout_id}' not found")
+            return response
+
+        with self.database.session() as session:
+            rollout = session.get(Rollout, rollout_id)
+            if rollout is None or rollout.config_name != name:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"rollout '{rollout_id}' not found")
+            if rollout.status != "active":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"rollout '{rollout_id}' is not active",
+                )
+            if payload.percent <= rollout.percent:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="advanced percent must be greater than the current rollout percent",
+                )
+            rollout.percent = payload.percent
+            self._create_audit(
+                session,
+                actor=actor,
+                action="config.rollout.advance",
+                config_name=rollout.config_name,
+                environment=rollout.environment,
+                version=rollout.to_version,
+                details={
+                    "target": rollout.target,
+                    "rollout_id": rollout_id,
+                    "percent": payload.percent,
+                },
+            )
+            session.commit()
+            response = RolloutResponse.model_validate(rollout, from_attributes=True)
+            event = {
+                "config_name": rollout.config_name,
+                "environment": rollout.environment,
+                "target": rollout.target,
+                "version": rollout.to_version,
+                "stable_version": rollout.from_version,
+                "rollout_percent": rollout.percent,
+                "rollout_id": rollout.rollout_id,
+            }
+        logger.info(
+            "rollout advanced",
+            extra={
+                "event": "config.rollout.advance",
+                "context": {
+                    "config_name": event["config_name"],
+                    "environment": event["environment"],
+                    "target": event["target"],
+                    "rollout_id": event["rollout_id"],
+                    "version": event["version"],
+                    "percent": payload.percent,
+                },
+            },
+        )
+        await self._publish_event(event="rollout_advanced", **event, reason=f"advanced to {payload.percent}%")
         return response
 
     async def promote_rollout(self, rollout_id: str) -> None:

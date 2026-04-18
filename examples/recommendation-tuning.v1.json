@@ -1,0 +1,5 @@
+{
+  "ranking_model": "baseline-v1",
+  "exploration_percent": 5,
+  "fallback_enabled": true
+}

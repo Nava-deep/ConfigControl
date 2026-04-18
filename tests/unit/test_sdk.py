@@ -41,6 +41,8 @@ def test_sdk_returns_cached_last_known_good_when_fetch_fails(tmp_path, monkeypat
     monkeypatch.setattr(client._client, "get", explode)  # noqa: SLF001
     config = client.get_typed("checkout-service.timeout", TimeoutConfig, force_refresh=True)
     assert config.timeout_ms == 1500
+    assert client.in_safe_mode() is True
+    assert client.last_fetch_mode() == "safe_mode"
     client.close()
 
 
@@ -59,6 +61,7 @@ def test_sdk_raises_without_cache_on_fetch_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(client._client, "get", explode)  # noqa: SLF001
     with pytest.raises(RuntimeError):
         client.get_typed("checkout-service.timeout", TimeoutConfig, force_refresh=True)
+    assert client.in_safe_mode() is False
     client.close()
 
 
@@ -168,6 +171,63 @@ def test_sdk_refreshes_stale_cache_from_network(tmp_path, monkeypatch):
     monkeypatch.setattr(client._client, "get", lambda *args, **kwargs: DummyResponse())  # noqa: SLF001
     config = client.get_typed("checkout-service.timeout", TimeoutConfig)
     assert config.timeout_ms == 2500
+    assert client.in_safe_mode() is False
+    assert client.last_fetch_mode() == "live"
+    client.close()
+
+
+def test_sdk_clears_safe_mode_after_a_successful_live_fetch(tmp_path, monkeypatch):
+    client = ConfigClient[TimeoutConfig](
+        base_url="http://config-service.local",
+        client_id="client-safe-reset",
+        target="checkout-service",
+        ttl_seconds=30,
+        cache_dir=tmp_path,
+    )
+    client._save_cache(  # noqa: SLF001
+        "checkout-service.timeout",
+        "resolved",
+        {
+            "name": "checkout-service.timeout",
+            "version": 1,
+            "target": "checkout-service",
+            "source": "stable",
+            "value": {"timeout_ms": 1500},
+            "schema": {},
+            "description": None,
+            "created_at": "2026-03-30T00:00:00+00:00",
+        },
+    )
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("network unavailable")
+
+    monkeypatch.setattr(client._client, "get", explode)  # noqa: SLF001
+    fallback = client.get_typed("checkout-service.timeout", TimeoutConfig, force_refresh=True)
+    assert fallback.timeout_ms == 1500
+    assert client.in_safe_mode() is True
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "name": "checkout-service.timeout",
+                "version": 2,
+                "target": "checkout-service",
+                "source": "stable",
+                "value": {"timeout_ms": 2400},
+                "schema": {},
+                "description": None,
+                "created_at": "2026-03-30T00:00:00+00:00",
+            }
+
+    monkeypatch.setattr(client._client, "get", lambda *args, **kwargs: DummyResponse())  # noqa: SLF001
+    recovered = client.get_typed("checkout-service.timeout", TimeoutConfig, force_refresh=True)
+    assert recovered.timeout_ms == 2400
+    assert client.in_safe_mode() is False
+    assert client.last_fetch_mode() == "live"
     client.close()
 
 

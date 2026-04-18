@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "enable_sca": {
+      "type": "boolean"
+    },
+    "payment_timeout_ms": {
+      "type": "integer",
+      "minimum": 100
+    },
+    "enable_network_retry": {
+      "type": "boolean"
+    }
+  },
+  "required": ["enable_sca", "payment_timeout_ms", "enable_network_retry"],
+  "additionalProperties": false
+}

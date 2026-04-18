@@ -1,0 +1,5 @@
+{
+  "ranking_model": "contextual-v2",
+  "exploration_percent": 12,
+  "fallback_enabled": true
+}

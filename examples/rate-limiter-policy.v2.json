@@ -1,0 +1,5 @@
+{
+  "requests_per_minute": 900,
+  "burst_limit": 180,
+  "safe_mode_rpm": 350
+}

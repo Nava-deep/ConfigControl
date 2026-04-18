@@ -19,6 +19,7 @@ from app.schemas.config import (
     DryRunMigrationResponse,
     EnvironmentName,
     NotificationEvent,
+    RolloutAdvanceRequest,
     RollbackRequest,
     RolloutRequest,
     RolloutResponse,
@@ -159,6 +160,17 @@ async def promote_rollout(
     actor: Actor = Depends(require_role("admin", "operator")),
 ):
     return await container_from_request(request).config_service.manual_promote_rollout(name, rollout_id, actor)
+
+
+@router.post("/configs/{name}/rollouts/{rollout_id}/advance", response_model=RolloutResponse)
+async def advance_rollout(
+    name: str,
+    rollout_id: str,
+    payload: RolloutAdvanceRequest,
+    request: Request,
+    actor: Actor = Depends(require_role("admin", "operator")),
+):
+    return await container_from_request(request).config_service.advance_rollout(name, rollout_id, payload, actor)
 
 
 @router.post("/configs/{name}/rollback", response_model=RolloutResponse)

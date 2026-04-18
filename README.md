@@ -1,33 +1,46 @@
 # Config Control Plane
 
-Centralized configuration management service with immutable versioning, canary rollouts, rollback safety, and real-time delivery.
+Internal developer platform for runtime configuration management with immutable versioning, staged canary rollouts, rollback safety, and real-time delivery.
 
 ## At a Glance
 
 This project demonstrates:
 - immutable config version history
 - target-based config resolution
-- deterministic `1%` to `100%` canary rollouts
+- deterministic staged canary rollouts from `1% -> 10% -> 100%`
 - promote and rollback workflows
 - JSON Schema validation before publish
 - RBAC and audit logs
 - WebSocket and long-poll hot reload
 - Redis fanout with in-memory fallback
+- explicit SDK safe mode during control-plane outages
 - Prometheus instrumentation
 - synthetic benchmark tooling
 - failure-scenario validation
 
-Proof included in the repository:
-- `43` automated tests
-- `9` synthetic benchmark measurements
-- `6` reproducible failure scenarios
-- JSON and Markdown reports for local benchmark and failure runs
+Platform framing:
+- payment-service feature flags
+- recommendation-service tuning
+- rate-limiter policy control
+- checkout-service timeout demo for live hot reload
 
 ## Why It Matters
 
 Configuration changes can be as risky as code deploys. Production systems need a safe way to change runtime behavior without redeploying services, limit blast radius during rollout, recover quickly from bad changes, and keep applications functioning when supporting infrastructure degrades.
 
-This project models that problem as a backend control plane rather than a simple CRUD API.
+This project models that problem as an internal developer platform and production control system rather than a simple CRUD API.
+
+## Real-World Use Cases
+
+This platform is positioned as the central config control system for:
+- `payment-service.flags`
+- `recommendation-service.tuning`
+- `rate-limiter-service.policy`
+
+Those examples show how platform teams would safely ship:
+- payment feature flags and retry behavior
+- recommendation ranking and exploration tuning
+- rate-limit policy and safe-mode throttling
 
 ## Core Capabilities
 
@@ -64,6 +77,22 @@ Component roles:
 - `Canary monitor`: evaluates synthetic rollout health and triggers promotion or rollback
 - `CLI / SDK`: operator workflow and application-side config consumption
 
+## Canary Progression
+
+```mermaid
+flowchart LR
+    V1["Stable version"] --> P1["1% canary"]
+    P1 --> P10["10% staged rollout"]
+    P10 --> P100["100% promoted stable"]
+    P10 --> RB["Auto rollback on metric degradation"]
+```
+
+What this means:
+- operators can start very small to limit blast radius
+- healthy signals allow the rollout to be advanced
+- degraded signals trigger automatic rollback
+- promotion to `100%` turns the candidate into the new stable version
+
 ## Design Focus
 
 The main design focus is:
@@ -80,11 +109,22 @@ The main design focus is:
 - Environment-aware resolution: supports `dev`, `staging`, and `prod`
 - Target-based resolution: configs resolve by service target and client identity
 - Canary rollout engine: partial rollout, deterministic bucketing, promote, and rollback
+- Staged progression: active rollouts can be advanced from small canaries to full promotion
 - Validation gates: JSON Schema validation on publish and dry-run schema checks
 - RBAC: `admin`, `operator`, and `reader`
 - Audit logs: records config mutation history
 - Delivery redundancy: Redis fanout when healthy, local in-memory delivery when degraded
-- Client safety: SDK cache and last-known-good fallback
+- Client safety: SDK cache, last-known-good fallback, and explicit safe mode
+
+## Safe Mode and Failure Handling
+
+Two failure cases matter most:
+- config server unavailable
+- bad config deployed
+
+How the platform handles them:
+- config server unavailable: SDK falls back to cached last-known-good config and enters safe mode until a live fetch succeeds again
+- bad config deployed: canary monitor detects degrading synthetic metrics and performs automatic rollback
 
 ## Validation Artifacts
 
@@ -92,6 +132,7 @@ Correctness coverage validates:
 - immutable versioning
 - target-based resolution
 - canary rollout correctness
+- rollout stage advancement
 - promote and rollback flows
 - RBAC and audit log behavior
 - Redis fallback and fanout behavior
@@ -119,11 +160,19 @@ Failure-scenario validation covers:
 ```bash
 make install
 make verify
+make seed-demo
+make demo-platform
 make bench-quick
 make bench
 make test-failure
 make failure-report
 ```
+
+Supporting docs:
+- `docs/platform_use_cases.md`
+- `docs/architecture.md`
+- `docs/failure_modes.md`
+- `docs/design_decisions.md`
 
 ## Report Outputs
 
@@ -192,6 +241,7 @@ These measurements describe reproducible development and benchmark conditions, n
 This repository shows:
 - non-trivial backend state management
 - rollout safety and rollback logic
+- staged platform-style progressive delivery
 - delivery behavior for live config updates
 - fallback behavior when Redis degrades
 - observability and measurable outputs

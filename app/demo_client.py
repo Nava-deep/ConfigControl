@@ -37,13 +37,16 @@ async def run() -> None:
     )
     try:
         current = client.get_typed(args.name, TimeoutConfig)
-        print(f"[{datetime.now().isoformat()}] boot config -> timeout_ms={current.timeout_ms}")
+        print(
+            f"[{datetime.now().isoformat()}] boot config -> "
+            f"timeout_ms={current.timeout_ms} mode={client.last_fetch_mode()} safe_mode={client.in_safe_mode()}"
+        )
 
         async def on_update(config: TimeoutConfig, event: dict) -> None:
             print(
                 f"[{datetime.now().isoformat()}] {event['event']} "
                 f"version={event['version']} stable={event['stable_version']} "
-                f"timeout_ms={config.timeout_ms}"
+                f"timeout_ms={config.timeout_ms} mode={client.last_fetch_mode()} safe_mode={client.in_safe_mode()}"
             )
 
         async def worker() -> None:
@@ -53,7 +56,10 @@ async def run() -> None:
                 handled_requests += 1
                 if args.simulate_failure_every and handled_requests % args.simulate_failure_every == 0:
                     raise RuntimeError("simulated request-path failure")
-                print(f"[{datetime.now().isoformat()}] request handled with timeout_ms={config.timeout_ms}")
+                print(
+                    f"[{datetime.now().isoformat()}] request handled with "
+                    f"timeout_ms={config.timeout_ms} mode={client.last_fetch_mode()} safe_mode={client.in_safe_mode()}"
+                )
                 await asyncio.sleep(3)
 
         await asyncio.gather(worker(), client.watch(args.name, TimeoutConfig, on_update))
@@ -63,7 +69,11 @@ async def run() -> None:
             exc,
             source="demo-client",
             app_version=args.app_version,
-            metadata={"simulate_failure_every": args.simulate_failure_every or None},
+            metadata={
+                "simulate_failure_every": args.simulate_failure_every or None,
+                "safe_mode": client.in_safe_mode(),
+                "last_fetch_mode": client.last_fetch_mode(),
+            },
         )
         raise
     finally:

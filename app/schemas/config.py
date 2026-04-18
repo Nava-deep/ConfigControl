@@ -71,6 +71,10 @@ class RolloutRequest(BaseModel):
     canary_check: CanaryCheck | None = None
 
 
+class RolloutAdvanceRequest(BaseModel):
+    percent: int = Field(ge=1, le=100)
+
+
 class RolloutResponse(BaseModel):
     rollout_id: str
     config_name: str

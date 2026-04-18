@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "ranking_model": {
+      "type": "string"
+    },
+    "exploration_percent": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "fallback_enabled": {
+      "type": "boolean"
+    }
+  },
+  "required": ["ranking_model", "exploration_percent", "fallback_enabled"],
+  "additionalProperties": false
+}

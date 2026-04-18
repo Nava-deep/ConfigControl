@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "requests_per_minute": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "burst_limit": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "safe_mode_rpm": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": ["requests_per_minute", "burst_limit", "safe_mode_rpm"],
+  "additionalProperties": false
+}

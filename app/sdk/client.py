@@ -46,6 +46,8 @@ class ConfigClient(Generic[ModelT]):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._anonymous_installation_id = self._load_or_create_installation_id()
         self._last_seen_payloads: dict[str, dict[str, Any]] = {}
+        self._safe_mode = False
+        self._last_fetch_mode = "cold_start"
         self._auth_headers = {"X-User-Id": user_id, "X-Role": role}
         self._client = httpx.Client(
             base_url=self.base_url,
@@ -56,10 +58,17 @@ class ConfigClient(Generic[ModelT]):
     def close(self) -> None:
         self._client.close()
 
+    def in_safe_mode(self) -> bool:
+        return self._safe_mode
+
+    def last_fetch_mode(self) -> str:
+        return self._last_fetch_mode
+
     def get(self, name: str, *, version: str = "resolved", force_refresh: bool = False) -> dict[str, Any]:
         if not force_refresh:
             cached = self._load_cache(name, version)
             if cached and self._is_fresh(cached):
+                self._last_fetch_mode = "cache"
                 self._last_seen_payloads[name] = cached["payload"]
                 return cached["payload"]
         try:
@@ -75,11 +84,15 @@ class ConfigClient(Generic[ModelT]):
             response.raise_for_status()
             payload = response.json()
             self._save_cache(name, version, payload)
+            self._safe_mode = False
+            self._last_fetch_mode = "live"
             self._last_seen_payloads[name] = payload
             return payload
         except Exception:
             cached = self._load_cache(name, version)
             if cached:
+                self._safe_mode = True
+                self._last_fetch_mode = "safe_mode"
                 self._last_seen_payloads[name] = cached["payload"]
                 return cached["payload"]
             raise

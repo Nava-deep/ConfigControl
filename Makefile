@@ -1,7 +1,7 @@
 PYTHON ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 
-.PHONY: install run test test-unit test-integration test-failure verify bench bench-quick failure-report demo-client seed-demo docker-up docker-down
+.PHONY: install run test test-unit test-integration test-failure verify bench bench-quick failure-report demo-client seed-demo demo-platform docker-up docker-down
 
 install:
 	python3 -m venv .venv
@@ -41,6 +41,9 @@ demo-client:
 
 seed-demo:
 	./scripts/seed-demo.sh
+
+demo-platform:
+	./scripts/demo-platform.sh
 
 docker-up:
 	docker compose up --build

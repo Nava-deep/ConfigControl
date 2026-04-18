@@ -271,6 +271,80 @@ def test_partial_rollout_can_be_promoted_manually(client):
     assert resolved.json()["source"] == "stable"
 
 
+def test_active_rollout_can_be_advanced_from_one_to_ten_to_hundred_percent(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 5000).status_code == 201
+
+    with client.websocket_connect(
+        "/watch/ws?config_name=checkout-service.timeout&environment=prod&target=checkout-service",
+        headers=READER_HEADERS,
+    ) as websocket:
+        websocket.receive_json()
+
+        rollout = client.post(
+            "/configs/checkout-service.timeout/rollout",
+            headers=ADMIN_HEADERS,
+            json={"target": "checkout-service", "environment": "prod", "percent": 1},
+        )
+        assert rollout.status_code == 200, rollout.text
+        rollout_id = rollout.json()["rollout_id"]
+        started_event = websocket.receive_json()
+        assert started_event["event"] == "rollout_started"
+        assert started_event["rollout_percent"] == 1
+
+        advanced = client.post(
+            f"/configs/checkout-service.timeout/rollouts/{rollout_id}/advance",
+            headers=ADMIN_HEADERS,
+            json={"percent": 10},
+        )
+        assert advanced.status_code == 200, advanced.text
+        assert advanced.json()["percent"] == 10
+        advanced_event = websocket.receive_json()
+        assert advanced_event["event"] == "rollout_advanced"
+        assert advanced_event["rollout_percent"] == 10
+
+        promoted = client.post(
+            f"/configs/checkout-service.timeout/rollouts/{rollout_id}/advance",
+            headers=ADMIN_HEADERS,
+            json={"percent": 100},
+        )
+        assert promoted.status_code == 200, promoted.text
+        assert promoted.json()["status"] == "promoted"
+        promoted_event = websocket.receive_json()
+        assert promoted_event["event"] == "rollout_promoted"
+        assert promoted_event["rollout_percent"] == 100
+
+    resolved = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"environment": "prod", "target": "checkout-service", "client_id": "advanced-client"},
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["version"] == 2
+    assert resolved.json()["source"] == "stable"
+
+
+def test_rollout_advance_rejects_equal_or_lower_percentage(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 5000).status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 10},
+    )
+    assert rollout.status_code == 200, rollout.text
+    rollout_id = rollout.json()["rollout_id"]
+
+    response = client.post(
+        f"/configs/checkout-service.timeout/rollouts/{rollout_id}/advance",
+        headers=ADMIN_HEADERS,
+        json={"percent": 10},
+    )
+    assert response.status_code == 409
+    assert "greater than the current rollout percent" in response.text
+
+
 def test_list_configs_respects_environment_filter_and_stable_version(client):
     assert create_version(client, 2000, environment="prod").status_code == 201
     assert create_version(client, 3500, environment="prod").status_code == 201

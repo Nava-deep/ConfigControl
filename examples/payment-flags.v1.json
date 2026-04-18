@@ -1,0 +1,5 @@
+{
+  "enable_sca": false,
+  "payment_timeout_ms": 1800,
+  "enable_network_retry": false
+}

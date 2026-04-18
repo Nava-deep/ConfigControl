@@ -54,6 +54,11 @@ def parse_args() -> argparse.Namespace:
     promote.add_argument("--name", required=True)
     promote.add_argument("--rollout-id", required=True)
 
+    advance = subparsers.add_parser("advance", help="Advance an active rollout to a higher rollout percentage")
+    advance.add_argument("--name", required=True)
+    advance.add_argument("--rollout-id", required=True)
+    advance.add_argument("--percent", required=True, type=int)
+
     audit = subparsers.add_parser("audit", help="Read audit log")
     audit.add_argument("--name")
 
@@ -156,6 +161,11 @@ def main() -> None:
             )
         elif args.command == "promote":
             response = client.post(f"/configs/{args.name}/rollouts/{args.rollout_id}/promote")
+        elif args.command == "advance":
+            response = client.post(
+                f"/configs/{args.name}/rollouts/{args.rollout_id}/advance",
+                json={"percent": args.percent},
+            )
         elif args.command == "audit":
             response = client.get("/audit", params={"name": args.name, "environment": args.environment})
         elif args.command == "failures":
