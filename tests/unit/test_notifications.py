@@ -85,6 +85,35 @@ async def test_publish_delivers_matching_event_to_subscriber():
 
 
 @pytest.mark.asyncio
+async def test_publish_increments_sequence_across_multiple_events():
+    hub = NotificationHub()
+
+    first = await hub.publish(
+        {
+            "event": "rollout_started",
+            "config_name": "checkout.timeout",
+            "environment": "prod",
+            "target": "checkout",
+            "version": 2,
+            "stable_version": 1,
+        }
+    )
+    second = await hub.publish(
+        {
+            "event": "rollout_advanced",
+            "config_name": "checkout.timeout",
+            "environment": "prod",
+            "target": "checkout",
+            "version": 2,
+            "stable_version": 1,
+        }
+    )
+
+    assert first["sequence"] == 1
+    assert second["sequence"] == 2
+
+
+@pytest.mark.asyncio
 async def test_publish_skips_non_matching_subscriber():
     hub = NotificationHub()
     websocket = FakeWebSocket()
@@ -180,6 +209,36 @@ async def test_poll_filters_out_non_matching_environment():
     result = await hub.poll(0, "checkout.timeout", "prod", "checkout", timeout=0.01)
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_poll_skips_nonmatching_older_event_and_returns_matching_newer_event():
+    hub = NotificationHub()
+    await hub.publish(
+        {
+            "event": "rollout_started",
+            "config_name": "payments.timeout",
+            "environment": "prod",
+            "target": "payments",
+            "version": 2,
+            "stable_version": 1,
+        }
+    )
+    await hub.publish(
+        {
+            "event": "rollout_started",
+            "config_name": "checkout.timeout",
+            "environment": "prod",
+            "target": "checkout",
+            "version": 2,
+            "stable_version": 1,
+        }
+    )
+
+    result = await hub.poll(0, "checkout.timeout", "prod", "checkout", timeout=0.01)
+
+    assert result is not None
+    assert result["config_name"] == "checkout.timeout"
 
 
 @pytest.mark.asyncio

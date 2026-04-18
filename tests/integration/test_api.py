@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import time
 
 import pytest
 
-from app.db.models import ConfigAssignment
+from app.db.models import ConfigAssignment, Rollout
 
 ADMIN_HEADERS = {"X-User-Id": "alice", "X-Role": "admin"}
 READER_HEADERS = {"X-User-Id": "reader", "X-Role": "reader"}
@@ -324,6 +325,51 @@ def test_active_rollout_can_be_advanced_from_one_to_ten_to_hundred_percent(clien
     assert resolved.json()["source"] == "stable"
 
 
+def test_canary_window_elapsed_triggers_auto_promotion(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 5000).status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={
+            "target": "checkout-service",
+            "environment": "prod",
+            "percent": 10,
+            "canary_check": {"metric": "error_rate", "threshold": 0.05, "window": 1},
+        },
+    )
+    assert rollout.status_code == 200, rollout.text
+    rollout_id = rollout.json()["rollout_id"]
+
+    container = client.app.state.container
+    with container.database.session() as session:
+        record = session.get(Rollout, rollout_id)
+        record.created_at = datetime.now(timezone.utc) - timedelta(minutes=2)
+        session.commit()
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        resolved = client.get(
+            "/configs/checkout-service.timeout",
+            headers=READER_HEADERS,
+            params={"environment": "prod", "target": "checkout-service"},
+        )
+        if resolved.status_code == 200 and resolved.json()["version"] == 2 and resolved.json()["source"] == "stable":
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("rollout did not auto-promote within timeout")
+
+    audit = client.get(
+        "/audit",
+        headers=ADMIN_HEADERS,
+        params={"name": "checkout-service.timeout", "environment": "prod"},
+    )
+    assert audit.status_code == 200
+    assert any(item["action"] == "config.rollout.auto_promote" for item in audit.json())
+
+
 def test_rollout_advance_rejects_equal_or_lower_percentage(client):
     assert create_version(client, 2000).status_code == 201
     assert create_version(client, 5000).status_code == 201
@@ -343,6 +389,38 @@ def test_rollout_advance_rejects_equal_or_lower_percentage(client):
     )
     assert response.status_code == 409
     assert "greater than the current rollout percent" in response.text
+
+
+def test_advance_missing_rollout_returns_404(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 5000).status_code == 201
+
+    response = client.post(
+        "/configs/checkout-service.timeout/rollouts/missing-rollout/advance",
+        headers=ADMIN_HEADERS,
+        json={"percent": 10},
+    )
+    assert response.status_code == 404
+
+
+def test_advance_non_active_rollout_returns_409(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 5000).status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 100},
+    )
+    assert rollout.status_code == 200, rollout.text
+
+    response = client.post(
+        f"/configs/checkout-service.timeout/rollouts/{rollout.json()['rollout_id']}/advance",
+        headers=ADMIN_HEADERS,
+        json={"percent": 100},
+    )
+    assert response.status_code == 409
+    assert "is not active" in response.text
 
 
 def test_list_configs_respects_environment_filter_and_stable_version(client):
@@ -737,6 +815,42 @@ def test_failure_telemetry_is_filtered_by_environment(client):
     assert staging_summary.json()[0]["environment"] == "staging"
 
 
+def test_failure_telemetry_list_respects_limit_and_recency(client):
+    assert create_version(client, 2000, environment="prod").status_code == 201
+
+    fingerprints: list[str] = []
+    for marker in ("11111111111111111111111111111111", "22222222222222222222222222222222", "33333333333333333333333333333333"):
+        fingerprints.append(marker)
+        report = client.post(
+            "/telemetry/failures",
+            headers=READER_HEADERS,
+            json={
+                "config_name": "checkout-service.timeout",
+                "environment": "prod",
+                "target": "checkout-service",
+                "source": "demo-client",
+                "error_type": "RuntimeError",
+                "fingerprint": marker,
+                "anonymous_installation_id": f"anon-{marker}",
+                "config_version": 1,
+                "config_source": "stable",
+                "metadata": {},
+            },
+        )
+        assert report.status_code == 202, report.text
+        time.sleep(0.01)
+
+    listed = client.get(
+        "/telemetry/failures",
+        headers=ADMIN_HEADERS,
+        params={"config_name": "checkout-service.timeout", "environment": "prod", "limit": 2},
+    )
+    assert listed.status_code == 200
+    body = listed.json()
+    assert len(body) == 2
+    assert [item["fingerprint"] for item in body] == fingerprints[-1:-3:-1]
+
+
 def test_failure_telemetry_list_filters_by_target_and_source(client):
     assert create_version(client, 2000, environment="prod").status_code == 201
 
@@ -828,6 +942,36 @@ def test_missing_config_endpoints_return_404(client):
     assert dry_run_response.status_code == 404
 
 
+def test_other_target_inherits_default_target_stable_version_without_creating_assignment(client):
+    assert create_version(client, 2000).status_code == 201
+    assert create_version(client, 2600).status_code == 201
+
+    rollout = client.post(
+        "/configs/checkout-service.timeout/rollout",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "percent": 100},
+    )
+    assert rollout.status_code == 200, rollout.text
+
+    container = client.app.state.container
+    with container.database.session() as session:
+        before = session.query(ConfigAssignment).count()
+
+    response = client.get(
+        "/configs/checkout-service.timeout",
+        headers=READER_HEADERS,
+        params={"version": "resolved", "environment": "prod", "target": "checkout-shadow", "client_id": "shadow-a"},
+    )
+    assert response.status_code == 200
+    assert response.json()["version"] == 2
+    assert response.json()["source"] == "stable"
+
+    with container.database.session() as session:
+        after = session.query(ConfigAssignment).count()
+
+    assert before == after == 1
+
+
 def test_latest_read_uses_cached_payload_when_database_session_is_unavailable(client, monkeypatch):
     assert create_version(client, 2000).status_code == 201
     container = client.app.state.container
@@ -904,6 +1048,17 @@ def test_schema_validation_failure_returns_422_without_creating_a_new_version(cl
     )
     assert versions.status_code == 200
     assert [item["version"] for item in versions.json()] == [1]
+
+
+def test_rollback_to_missing_version_returns_404(client):
+    assert create_version(client, 2000).status_code == 201
+
+    response = client.post(
+        "/configs/checkout-service.timeout/rollback",
+        headers=ADMIN_HEADERS,
+        json={"target": "checkout-service", "environment": "prod", "target_version": 99},
+    )
+    assert response.status_code == 404
 
 
 def test_create_rollout_and_rollback_write_audit_entries(client):

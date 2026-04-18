@@ -4,7 +4,7 @@
 
 - Built a centralized configuration control plane in Python with 19 API endpoints, immutable version history, and environment-aware target resolution across `dev`, `staging`, and `prod`, enabling safe runtime config changes without service restarts.
 - Implemented deterministic 1%-100% canary rollouts with promotion and automatic rollback, Redis-backed cross-instance fanout, and SDK-based last-known-good fallback, protecting clients during bad config pushes and Redis outages.
-- Added production-style operational safeguards including RBAC audit logs, anonymous failure telemetry, 13 Prometheus metrics, Docker Compose, Kubernetes manifests, GitHub Actions CI, and 560 automated tests covering rollout, delivery, failure scenarios, and helper-layer correctness.
+- Added production-style operational safeguards including RBAC audit logs, anonymous failure telemetry, 13 Prometheus metrics, Docker Compose, Kubernetes manifests, GitHub Actions CI, and 569 automated tests covering rollout, delivery, failure scenarios, and helper-layer correctness.
 
 ## Interview questions and model answers
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import redis
 
 from app.core.settings import Settings
 from app.services.cache import CacheService
@@ -154,3 +155,27 @@ async def test_event_bridge_stop_clears_running_task(monkeypatch):
     await bridge.stop()
 
     assert bridge._task is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_event_bridge_marks_cache_unavailable_when_pubsub_errors(monkeypatch):
+    pubsub = FakePubSub([])
+
+    def boom(*args, **kwargs):
+        bridge._stop.set()
+        raise redis.RedisError("pubsub read failed")
+
+    pubsub.get_message = boom  # type: ignore[method-assign]
+    settings = Settings(use_redis=False, instance_id="local-instance")
+    cache = CacheService(settings)
+    cache.client = FakeRedisClient(pubsub)
+    cache._set_available(True)  # noqa: SLF001
+    notifications = NotificationHub()
+    bridge = RedisEventBridge(settings=settings, cache=cache, notifications=notifications)
+
+    monkeypatch.setattr(notifications, "publish", pytest.fail)
+
+    await bridge._run()
+
+    assert cache.is_available() is False
+    assert pubsub.closed is True
