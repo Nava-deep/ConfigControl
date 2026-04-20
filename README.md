@@ -24,6 +24,14 @@ Platform framing:
 - rate-limiter policy control
 - checkout-service timeout demo for live hot reload
 
+## Judge Vortex Integration
+
+The control plane now has a documented cross-project role in the wider platform setup:
+
+- `judge-vortex.runtime` stores the runtime knobs that tell Judge Vortex when to consult the distributed limiter
+- `judge-vortex.submission-rate-limit-policy` stores the limiter policy payload that `DistributedRateLimiter` can sync into its own database
+- Judge Vortex reads the runtime config as a normal resolved config client, while the limiter sync endpoint reads the policy config as a validated object payload
+
 ## Why It Matters
 
 Configuration changes can be as risky as code deploys. Production systems need a safe way to change runtime behavior without redeploying services, limit blast radius during rollout, recover quickly from bad changes, and keep applications functioning when supporting infrastructure degrades.

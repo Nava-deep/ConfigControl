@@ -112,6 +112,140 @@ def test_first_version_requires_schema(client):
     assert "schema is required for the first config version" in response.text
 
 
+def test_judge_vortex_runtime_and_rate_limit_policy_configs_can_be_resolved(client):
+    runtime_schema = {
+        "type": "object",
+        "properties": {
+            "distributed_rate_limiter": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "mode": {"type": "string"},
+                    "route": {"type": "string"},
+                    "timeout_ms": {"type": "integer", "minimum": 1},
+                    "fail_open": {"type": "boolean"},
+                },
+                "required": ["enabled", "mode", "route", "timeout_ms", "fail_open"],
+                "additionalProperties": False,
+            },
+            "queue_throttle": {
+                "type": "object",
+                "properties": {
+                    "allow_when_depth_at_or_below": {"type": "integer", "minimum": 0},
+                    "fallback_to_drf": {"type": "boolean"},
+                },
+                "required": ["allow_when_depth_at_or_below", "fallback_to_drf"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["distributed_rate_limiter", "queue_throttle"],
+        "additionalProperties": False,
+    }
+    policy_schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "algorithm": {"type": "string"},
+            "rate": {"type": "integer", "minimum": 1},
+            "window_seconds": {"type": "integer", "minimum": 1},
+            "burst_capacity": {"type": "integer", "minimum": 1},
+            "active": {"type": "boolean"},
+            "priority": {"type": "integer"},
+            "route": {"type": "string"},
+            "failure_mode": {"type": "string"},
+        },
+        "required": [
+            "name",
+            "algorithm",
+            "rate",
+            "window_seconds",
+            "burst_capacity",
+            "active",
+            "priority",
+            "route",
+            "failure_mode",
+        ],
+        "additionalProperties": False,
+    }
+
+    runtime_create = client.post(
+        "/configs",
+        headers=ADMIN_HEADERS,
+        json={
+            "name": "judge-vortex.runtime",
+            "environment": "prod",
+            "schema": runtime_schema,
+            "value": {
+                "distributed_rate_limiter": {
+                    "enabled": True,
+                    "mode": "queue_busy",
+                    "route": "/api/submissions/submit/",
+                    "timeout_ms": 400,
+                    "fail_open": True,
+                },
+                "queue_throttle": {
+                    "allow_when_depth_at_or_below": 0,
+                    "fallback_to_drf": True,
+                },
+            },
+        },
+    )
+    policy_create = client.post(
+        "/configs",
+        headers=ADMIN_HEADERS,
+        json={
+            "name": "judge-vortex.submission-rate-limit-policy",
+            "environment": "prod",
+            "schema": policy_schema,
+            "value": {
+                "name": "judge-vortex-submission-limit",
+                "description": "Protect Judge Vortex submission spikes.",
+                "algorithm": "token_bucket",
+                "rate": 6,
+                "window_seconds": 60,
+                "burst_capacity": 8,
+                "active": True,
+                "priority": 10,
+                "route": "/api/submissions/submit/",
+                "failure_mode": "fail_closed",
+            },
+        },
+    )
+
+    assert runtime_create.status_code == 201, runtime_create.text
+    assert policy_create.status_code == 201, policy_create.text
+
+    runtime_resolved = client.get(
+        "/configs/judge-vortex.runtime",
+        headers=READER_HEADERS,
+        params={
+            "version": "resolved",
+            "environment": "prod",
+            "target": "judge-vortex",
+            "client_id": "judge-vortex-web",
+        },
+    )
+    policy_resolved = client.get(
+        "/configs/judge-vortex.submission-rate-limit-policy",
+        headers=READER_HEADERS,
+        params={
+            "version": "resolved",
+            "environment": "prod",
+            "target": "judge-vortex",
+            "client_id": "distributed-rate-limiter",
+        },
+    )
+
+    assert runtime_resolved.status_code == 200
+    assert runtime_resolved.json()["value"]["distributed_rate_limiter"]["enabled"] is True
+    assert runtime_resolved.json()["target"] == "judge-vortex"
+
+    assert policy_resolved.status_code == 200
+    assert policy_resolved.json()["value"]["name"] == "judge-vortex-submission-limit"
+    assert policy_resolved.json()["value"]["route"] == "/api/submissions/submit/"
+
+
 def test_websocket_receives_rollout_event_and_canary_resolution(client):
     assert create_version(client, 2000).status_code == 201
     assert create_version(client, 2500).status_code == 201
