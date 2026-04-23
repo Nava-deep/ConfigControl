@@ -117,6 +117,19 @@ Config Control Plane is deployed as an internal platform service in the AWS-host
 - DistributedRateLimiter consumes it as a validated policy source
 - monitoring is exposed through the shared Prometheus/Grafana setup used by the full platform
 
+### AWS Runtime Measurements
+
+The figures below were sampled from the deployed AWS environment on April 23, 2026. They are live deployment measurements, not local development timings.
+
+Public ingress latency:
+
+- `GET /platform/config/judge-vortex.runtime`: avg `152.14 ms`, p95 `154.22 ms`, p99 `154.94 ms`
+- `GET /platform/config/judge-vortex.submission-rate-limit-policy`: avg `152.47 ms`, p95 `154.09 ms`, p99 `158.74 ms`
+
+Internal service latency on the EC2 host:
+
+- `GET http://127.0.0.1:8080/configs/judge-vortex.runtime`: avg `6.02 ms`, p95 `6.57 ms`, p99 `7.83 ms`
+
 ## Observability
 
 The service exposes operational signals for:
