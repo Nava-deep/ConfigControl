@@ -1,256 +1,139 @@
 # Config Control Plane
 
-Internal developer platform for runtime configuration management with immutable versioning, staged canary rollouts, rollback safety, and real-time delivery.
+Config Control Plane is a runtime configuration service for safely changing application behavior without redeploying code. It provides immutable versioning, staged rollout control, rollback safety, auditability, and live config delivery for platform services.
 
-## At a Glance
+In this platform, it acts as the configuration backbone for Judge Vortex and DistributedRateLimiter.
 
-This project demonstrates:
-- immutable config version history
-- target-based config resolution
-- deterministic staged canary rollouts from `1% -> 10% -> 100%`
-- promote and rollback workflows
-- JSON Schema validation before publish
-- RBAC and audit logs
-- WebSocket and long-poll hot reload
+## What It Does
+
+This service manages runtime configuration through:
+
+- immutable version history
+- target-aware config resolution
+- staged canary rollout progression
+- rollback and promotion workflows
+- schema validation before publish
+- role-based access control
+- audit logging
+- WebSocket and long-poll delivery paths
 - Redis fanout with in-memory fallback
-- explicit SDK safe mode during control-plane outages
-- Prometheus instrumentation
-- synthetic benchmark tooling
-- failure-scenario validation
+- SDK last-known-good and safe-mode behavior
 
-Platform framing:
-- payment-service feature flags
-- recommendation-service tuning
-- rate-limiter policy control
-- checkout-service timeout demo for live hot reload
+## Platform Role
 
-## Judge Vortex Integration
+Config Control Plane is one of the three connected services in the platform:
 
-The control plane now has a documented cross-project role in the wider platform setup:
+- `Judge Vortex`: main exam and judging application
+- `Config Control Plane`: runtime configuration service
+- `DistributedRateLimiter`: shared submission decision service
 
-- `judge-vortex.runtime` stores the runtime knobs that tell Judge Vortex when to consult the distributed limiter
-- `judge-vortex.submission-rate-limit-policy` stores the limiter policy payload that `DistributedRateLimiter` can sync into its own database
-- Judge Vortex reads the runtime config as a normal resolved config client, while the limiter sync endpoint reads the policy config as a validated object payload
+It currently provides:
+
+- `judge-vortex.runtime`
+  runtime knobs that let Judge Vortex change limiter behavior and queue-related controls
+
+- `judge-vortex.submission-rate-limit-policy`
+  validated limiter policy payloads that DistributedRateLimiter can sync into its own policy store
+
+That gives the platform a clean separation:
+
+- Judge Vortex focuses on exam and judging behavior
+- Config Control Plane owns runtime change management
+- DistributedRateLimiter owns final quota enforcement
 
 ## Why It Matters
 
-Configuration changes can be as risky as code deploys. Production systems need a safe way to change runtime behavior without redeploying services, limit blast radius during rollout, recover quickly from bad changes, and keep applications functioning when supporting infrastructure degrades.
+Configuration changes can be as risky as code deploys.
 
-This project models that problem as an internal developer platform and production control system rather than a simple CRUD API.
+Production systems need a safe control surface for:
 
-## Real-World Use Cases
+- changing runtime behavior without shipping a new release
+- limiting blast radius during rollout
+- recovering quickly from bad changes
+- keeping applications functional when supporting infrastructure degrades
 
-This platform is positioned as the central config control system for:
-- `payment-service.flags`
-- `recommendation-service.tuning`
-- `rate-limiter-service.policy`
-
-Those examples show how platform teams would safely ship:
-- payment feature flags and retry behavior
-- recommendation ranking and exploration tuning
-- rate-limit policy and safe-mode throttling
-
-## Core Capabilities
-
-- Immutable versioning with environment-aware config history
-- Target-based resolution by service target and client identity
-- Deterministic canary rollout logic with promotion and rollback
-- Real-time updates over WebSocket and long-poll
-- Redis fanout with local in-memory fallback
-- RBAC, audit logs, health checks, and Prometheus metrics
-- Python SDK and operator CLI for realistic control-plane usage
+This project models configuration as a platform concern rather than a simple CRUD problem.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Operator["Operator / CLI"] --> API["FastAPI API"]
-    Client["Application / SDK"] --> API
+    Operator["Operator / CLI / Admin"] --> API["FastAPI API"]
+    Service["Application / SDK Client"] --> API
     API --> DB["PostgreSQL"]
     API --> Redis["Redis"]
-    API --> Watch["WebSocket / Long-poll Delivery"]
+    API --> Delivery["WebSocket / Long-poll Delivery"]
     Redis --> Fanout["Cross-instance Fanout"]
-    Fanout --> Watch
+    Fanout --> Delivery
     API --> Canary["Canary Monitor"]
     Canary --> DB
     Canary --> Redis
-    Watch --> Client
+    Delivery --> Service
 ```
 
-Component roles:
-- `FastAPI API`: config CRUD, rollout, rollback, audit, telemetry, health, and metrics endpoints
-- `PostgreSQL`: source of truth for config versions, assignments, rollout state, and audit logs
-- `Redis`: fanout and cache acceleration when available
-- `Notification hub`: in-process WebSocket and long-poll delivery path
-- `Canary monitor`: evaluates synthetic rollout health and triggers promotion or rollback
-- `CLI / SDK`: operator workflow and application-side config consumption
+## Core Capabilities
 
-## Canary Progression
+- immutable config versioning
+- environment-aware and target-aware resolution
+- staged rollout progression
+- rollback and promotion controls
+- validation gates with JSON Schema
+- admin, operator, and reader roles
+- live delivery to connected clients
+- safe fallback behavior when Redis is degraded
+
+## Rollout Model
 
 ```mermaid
 flowchart LR
-    V1["Stable version"] --> P1["1% canary"]
-    P1 --> P10["10% staged rollout"]
-    P10 --> P100["100% promoted stable"]
-    P10 --> RB["Auto rollback on metric degradation"]
+    Stable["Stable version"] --> Canary1["1% rollout"]
+    Canary1 --> Canary10["10% rollout"]
+    Canary10 --> Full["100% promoted"]
+    Canary10 --> Rollback["Automatic rollback on bad signals"]
 ```
 
-What this means:
-- operators can start very small to limit blast radius
-- healthy signals allow the rollout to be advanced
-- degraded signals trigger automatic rollback
-- promotion to `100%` turns the candidate into the new stable version
+This model is designed so operators can:
 
-## Design Focus
+- ship a new config version with limited exposure
+- observe rollout health before broadening traffic
+- promote successful versions
+- automatically or manually roll back degraded versions
 
-The main design focus is:
-- safe runtime change management through immutable versions
-- rollout blast-radius control with deterministic canary targeting
-- degradation handling when Redis is unavailable or slow
-- real-time client update delivery over WebSocket and long-poll
-- auditability and rollback correctness
-- measurable validation through tests, benchmarks, and failure reports
+## Delivery and Safety
 
-## Reliability Features
+The service supports both direct reads and live change delivery:
 
-- Immutable versions: every publish creates a new version; old versions are never overwritten
-- Environment-aware resolution: supports `dev`, `staging`, and `prod`
-- Target-based resolution: configs resolve by service target and client identity
-- Canary rollout engine: partial rollout, deterministic bucketing, promote, and rollback
-- Staged progression: active rollouts can be advanced from small canaries to full promotion
-- Validation gates: JSON Schema validation on publish and dry-run schema checks
-- RBAC: `admin`, `operator`, and `reader`
-- Audit logs: records config mutation history
-- Delivery redundancy: Redis fanout when healthy, local in-memory delivery when degraded
-- Client safety: SDK cache, last-known-good fallback, and explicit safe mode
+- normal config fetch and resolved config reads
+- WebSocket delivery for live clients
+- long-poll delivery for clients without a persistent socket
+- last-known-good fallback in the SDK
+- explicit safe mode during control-plane or dependency outages
 
-## Safe Mode and Failure Handling
+## AWS Deployment
 
-Two failure cases matter most:
-- config server unavailable
-- bad config deployed
+Config Control Plane is deployed as an internal platform service in the AWS-hosted stack.
 
-How the platform handles them:
-- config server unavailable: SDK falls back to cached last-known-good config and enters safe mode until a live fetch succeeds again
-- bad config deployed: canary monitor detects degrading synthetic metrics and performs automatic rollback
+- Judge Vortex consumes it as a runtime config client
+- DistributedRateLimiter consumes it as a validated policy source
+- monitoring is exposed through the shared Prometheus/Grafana setup used by the full platform
 
-## Validation Artifacts
+## Observability
 
-Correctness coverage validates:
-- immutable versioning
-- target-based resolution
-- canary rollout correctness
-- rollout stage advancement
-- promote and rollback flows
-- RBAC and audit log behavior
-- Redis fallback and fanout behavior
-- WebSocket and long-poll delivery semantics
+The service exposes operational signals for:
 
-Synthetic benchmark coverage measures:
-- fetch throughput
-- average and p95 fetch latency
-- publish latency
-- rollback latency
-- WebSocket propagation latency
-- long-poll propagation and timeout behavior
-- concurrent synthetic request performance
+- config publish and mutation activity
+- rollout progression and rollback events
+- delivery fanout activity
+- API latency and health state
+- cache and fallback behavior
 
-Failure-scenario validation covers:
-- Redis unavailable at startup
-- invalid schema publish rejection
-- WebSocket delivery during Redis publish failure
-- long-poll delivery during Redis publish failure
-- rollback correctness during Redis publish failure
-- delayed Redis read fallback behavior
+## Repository Structure
 
-## Verification
+- `app/`: API routes, services, notifications, security, and container wiring
+- `migrations/`: schema migration history
+- `docs/`: design, architecture, and failure-mode notes
+- `docker-compose.yml`: service wiring for the platform stack
 
-```bash
-make install
-make verify
-make seed-demo
-make demo-platform
-make bench-quick
-make bench
-make test-failure
-make failure-report
-```
+## Summary
 
-Supporting docs:
-- `docs/platform_use_cases.md`
-- `docs/architecture.md`
-- `docs/failure_modes.md`
-- `docs/design_decisions.md`
-
-## Report Outputs
-
-Synthetic benchmark artifacts:
-- `perf/results/latest_results.json`
-- `perf/results/latest_report.md`
-
-Failure-scenario artifacts:
-- `perf/results/latest_failure_results.json`
-- `perf/results/latest_failure_report.md`
-
-These files capture locally measured synthetic benchmark and failure-scenario outputs.
-
-## Benchmark Output Fields
-
-- `publish_latency_ms`: time to create a new immutable version
-- `resolved_fetch_latency_ms`: latency for normal target-based config reads
-- `uncached_fetch_latency_ms`: explicit version fetch with cache cleared
-- `cached_fetch_latency_ms`: explicit version fetch after cache warm-up
-- `rollback_latency_ms`: rollback execution latency
-- `websocket_delivery_latency_ms`: time from event publish to websocket receipt
-- `longpoll_delivery_latency_ms`: time from event publish to long-poll response
-- `longpoll_timeout_duration_ms`: how closely idle long-poll requests match the configured timeout
-- `concurrent_fetch_latency_ms`: latency under concurrent synthetic fetch load
-
-Important report fields:
-- `average_ms`: mean latency across the samples
-- `p95_ms`: tail latency for the slowest `5%` of samples
-- `throughput_rps`: requests per second during concurrent synthetic load
-- `failures`: benchmark error count
-- `metrics_delta`: which Prometheus counters moved during the run
-
-## Failure Report Fields
-
-- `scenario_count`: number of synthetic failure scenarios executed
-- `passed_count` / `failed_count`: scenario outcome totals
-- `error_count`: total scenario failures
-- `observed_latency_ms`: latency observed during degraded operation
-- `propagation_latency_ms`: delivery delay during degraded delivery scenarios
-- `metrics_delta`: fallback, validation, rollback, and delivery counters changed by the scenario
-
-## Measurement Scope
-
-All performance and reliability outputs in this repository are produced through:
-- local synthetic benchmarks
-- controlled failure-scenario validation
-- the included JSON and Markdown reporting harnesses
-
-These measurements describe reproducible development and benchmark conditions, not production-user traffic.
-
-## Technology Stack
-
-- FastAPI
-- SQLAlchemy
-- PostgreSQL
-- Redis
-- WebSockets
-- Prometheus
-- Python SDK and CLI
-- Docker Compose
-- Kubernetes manifests
-- Pytest
-
-## Project Summary
-
-This repository shows:
-- non-trivial backend state management
-- rollout safety and rollback logic
-- staged platform-style progressive delivery
-- delivery behavior for live config updates
-- fallback behavior when Redis degrades
-- observability and measurable outputs
-- reproducible engineering evidence instead of unverified claims
+Config Control Plane gives this platform a safe runtime control surface. Instead of hard-coding operational decisions into application releases, it allows Judge Vortex and DistributedRateLimiter to evolve behavior through validated, observable, rollback-safe configuration changes.
