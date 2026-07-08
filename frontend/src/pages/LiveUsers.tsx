@@ -56,15 +56,14 @@ export default function LiveUsers() {
       ws.onopen = async () => {
         setClients(prev => prev.map(c => c.id === client.id ? { ...c, connected: true } : c));
         
-        // 1. Fetch all config definitions to see which belong to this target
         try {
           const listRes = await fetch(`${API}/configs?environment=${ENV}`, {
             headers: { 'X-User-Id': 'demo-ui', 'X-Role': 'reader' }
           });
           const allConfigs = await listRes.json();
-          const targetConfigs = allConfigs.filter((c: any) => c.stable_target === targetCluster);
+          // Use name.includes as a fallback because newly seeded configs don't have a stable_target until rolled out
+          const targetConfigs = allConfigs.filter((c: any) => c.stable_target === targetCluster || c.name.includes(targetCluster));
           
-          // 2. Fetch initial resolved state for each
           for (const config of targetConfigs) {
             await fetchConfigState(config.name);
           }
@@ -76,7 +75,6 @@ export default function LiveUsers() {
       ws.onmessage = (event) => {
         const payload = JSON.parse(event.data);
         if (payload.event !== 'connected' && payload.config_name) {
-          // Re-fetch only the config that changed
           fetchConfigState(payload.config_name);
         }
       };
@@ -89,10 +87,10 @@ export default function LiveUsers() {
     });
 
     return () => {
-      // Cleanup connections when target changes or unmounts
-      setClients(current => {
-        current.forEach(c => c.ws?.close());
-        return [];
+      newClients.forEach(c => {
+        if (c.ws) {
+          c.ws.close();
+        }
       });
     };
   }, [targetCluster]);
