@@ -138,17 +138,56 @@ export default function LiveUsers() {
   const triggerRollout = async (percent: number) => {
     if (!selectedConfig) return;
     
-    // We try to advance first (in case one is active), if that fails, we start a new one.
-    // Since we don't store rollout_id, we just start a new one. If it conflicts, we handle it or we can just send POST /configs/{name}/rollout
-    
     try {
+      // 1. If stable === latest, we need to create a candidate version first!
+      if (stableVersion === latestVersion) {
+        const getRes = await fetch(`${API}/configs/${selectedConfig}?environment=${ENV}`, {
+          headers: { 'X-User-Id': 'admin', 'X-Role': 'admin' }
+        });
+        const currentData = await getRes.json();
+        
+        const newValue = { ...currentData.value, _canary_timestamp: Date.now() };
+        
+        const createRes = await fetch(`${API}/configs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': 'admin', 'X-Role': 'admin' },
+          body: JSON.stringify({
+            name: selectedConfig,
+            environment: ENV,
+            value: newValue,
+            description: 'Auto-generated candidate for Canary Demo',
+          })
+        });
+        
+        if (!createRes.ok) {
+           const err = await createRes.json();
+           alert(`Failed to create candidate: ${err.detail}`);
+           return;
+        }
+      }
+
+      // 2. If we already have an active rollout session in memory, advance or promote it
+      if (activeRollout) {
+        if (percent === 100) {
+          await fetch(`${API}/configs/${selectedConfig}/rollouts/${activeRollout}/promote`, {
+            method: 'POST',
+            headers: { 'X-User-Id': 'admin', 'X-Role': 'admin' }
+          });
+          setActiveRollout(null);
+        } else {
+          await fetch(`${API}/configs/${selectedConfig}/rollouts/${activeRollout}/advance`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-User-Id': 'admin', 'X-Role': 'admin' },
+            body: JSON.stringify({ percent })
+          });
+        }
+        return;
+      }
+
+      // 3. Otherwise, start a brand new rollout
       const res = await fetch(`${API}/configs/${selectedConfig}/rollout`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-User-Id': 'admin',
-          'X-Role': 'admin' 
-        },
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': 'admin', 'X-Role': 'admin' },
         body: JSON.stringify({
           target: targetCluster,
           environment: ENV,
@@ -156,10 +195,12 @@ export default function LiveUsers() {
         })
       });
       
-      if (!res.ok) {
-        // Might already exist, let's just trigger a re-fetch of clients to simulate.
-        // For a full implementation, we would fetch active rollout_id and call /advance.
-        // For interview demo, creating a new version in ConfigManager and then rolling it out here works!
+      if (res.ok) {
+        const data = await res.json();
+        if (percent < 100) {
+          setActiveRollout(data.rollout_id); // Save for subsequent advances
+        }
+      } else {
         const err = await res.json();
         alert(`Could not start rollout: ${err.detail}`);
       }
@@ -225,22 +266,22 @@ export default function LiveUsers() {
               Canary Controls (Stable: v{stableVersion} | Latest: v{latestVersion})
             </label>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button className="btn btn-outline" onClick={() => triggerRollout(10)} disabled={stableVersion === latestVersion} style={{ flex: 1, padding: '0.5rem' }}>
+              <button className="btn btn-outline" onClick={() => triggerRollout(10)} style={{ flex: 1, padding: '0.5rem' }}>
                 10%
               </button>
-              <button className="btn btn-outline" onClick={() => triggerRollout(25)} disabled={stableVersion === latestVersion} style={{ flex: 1, padding: '0.5rem' }}>
+              <button className="btn btn-outline" onClick={() => triggerRollout(25)} style={{ flex: 1, padding: '0.5rem' }}>
                 25%
               </button>
-              <button className="btn btn-outline" onClick={() => triggerRollout(50)} disabled={stableVersion === latestVersion} style={{ flex: 1, padding: '0.5rem' }}>
+              <button className="btn btn-outline" onClick={() => triggerRollout(50)} style={{ flex: 1, padding: '0.5rem' }}>
                 50%
               </button>
-              <button className="btn btn-primary" onClick={() => triggerRollout(100)} disabled={stableVersion === latestVersion} style={{ flex: 1, padding: '0.5rem' }}>
+              <button className="btn btn-primary" onClick={() => triggerRollout(100)} style={{ flex: 1, padding: '0.5rem' }}>
                 100%
               </button>
             </div>
             {stableVersion === latestVersion && (
-              <div style={{ fontSize: '0.75rem', color: 'var(--warning)', marginTop: '0.5rem' }}>
-                No candidate version available. Go to Config Manager and click "Edit" to create a new version first!
+              <div style={{ fontSize: '0.75rem', color: 'var(--success)', marginTop: '0.5rem' }}>
+                Tip: Clicking a percentage will automatically generate and deploy a candidate version!
               </div>
             )}
           </div>
