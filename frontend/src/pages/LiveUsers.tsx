@@ -158,9 +158,14 @@ export default function LiveUsers() {
     try {
       // 1. If stable === latest, we need to create a candidate version first!
       if (stableVersion === latestVersion) {
-        const getRes = await fetch(`${API}/configs/${selectedConfig}?environment=${ENV}`, {
+        const getRes = await fetch(`${API}/configs/${selectedConfig}?target=${targetCluster}&environment=${ENV}`, {
           headers: { 'X-User-Id': 'admin', 'X-Role': 'admin' }
         });
+        
+        if (!getRes.ok) {
+           alert("Failed to fetch current config state to mutate!");
+           return;
+        }
         const currentData = await getRes.json();
         
         // Mutate safely to avoid strict schema additionalProperties errors
@@ -220,10 +225,15 @@ export default function LiveUsers() {
         }
       } else {
         const err = await res.json();
-        alert(`Could not start rollout: ${err.detail}`);
+        if (res.status === 409) {
+           alert("An active rollout is already in progress but the session was lost (likely due to a page refresh). Please go to Config Manager and click 'Edit' to force-promote to 100% and reset the state.");
+        } else {
+           alert(`Could not start rollout: ${err.detail}`);
+        }
       }
     } catch (e) {
       console.error(e);
+      alert(`Unexpected error: ${e}`);
     }
   };
 
