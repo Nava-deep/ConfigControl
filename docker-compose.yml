@@ -8,6 +8,9 @@ services:
       CONFIG_SERVICE_REDIS_URL: redis://redis:6379/0
       CONFIG_SERVICE_USE_REDIS: "true"
       CONFIG_SERVICE_CANARY_POLL_INTERVAL_SECONDS: "0.5"
+    volumes:
+      - ./app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
     ports:
       - "8080:8080"
     depends_on:
