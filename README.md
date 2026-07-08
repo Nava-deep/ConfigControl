@@ -2,7 +2,7 @@
 
 Config Control Plane is a runtime configuration service for safely changing application behavior without redeploying code. It provides immutable versioning, staged rollout control, rollback safety, auditability, and live config delivery for platform services.
 
-In this platform, it acts as the configuration backbone for Judge Vortex and DistributedRateLimiter.
+In this platform, it acts as the configuration backbone for Judge Vortex and other backend services that need safe runtime changes.
 
 ## What It Does
 
@@ -21,25 +21,20 @@ This service manages runtime configuration through:
 
 ## Platform Role
 
-Config Control Plane is one of the three connected services in the platform:
+Config Control Plane is one of the connected services in the platform:
 
 - `Judge Vortex`: main exam and judging application
 - `Config Control Plane`: runtime configuration service
-- `DistributedRateLimiter`: shared submission decision service
 
 It currently provides:
 
 - `judge-vortex.runtime`
-  runtime knobs that let Judge Vortex change limiter behavior and queue-related controls
-
-- `judge-vortex.submission-rate-limit-policy`
-  validated limiter policy payloads that DistributedRateLimiter can sync into its own policy store
+  runtime knobs that let Judge Vortex change queue-related controls and operational behavior
 
 That gives the platform a clean separation:
 
 - Judge Vortex focuses on exam and judging behavior
 - Config Control Plane owns runtime change management
-- DistributedRateLimiter owns final quota enforcement
 
 ## Why It Matters
 
@@ -114,7 +109,6 @@ The service supports both direct reads and live change delivery:
 Config Control Plane is deployed as an internal platform service in the AWS-hosted stack.
 
 - Judge Vortex consumes it as a runtime config client
-- DistributedRateLimiter consumes it as a validated policy source
 - monitoring is exposed through the shared Prometheus/Grafana setup used by the full platform
 
 ### AWS Runtime Measurements
@@ -149,4 +143,4 @@ The service exposes operational signals for:
 
 ## Summary
 
-Config Control Plane gives this platform a safe runtime control surface. Instead of hard-coding operational decisions into application releases, it allows Judge Vortex and DistributedRateLimiter to evolve behavior through validated, observable, rollback-safe configuration changes.
+Config Control Plane gives this platform a safe runtime control surface. Instead of hard-coding operational decisions into application releases, it allows backend services to evolve behavior through validated, observable, rollback-safe configuration changes.

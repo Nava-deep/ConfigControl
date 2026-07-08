@@ -31,7 +31,6 @@ seed_pair() {
 
 seed_pair "payment-service.flags" "examples/payment-flags.schema.json" "examples/payment-flags.v1.json" "examples/payment-flags.v2.json" "payments" "payment flags"
 seed_pair "recommendation-service.tuning" "examples/recommendation-tuning.schema.json" "examples/recommendation-tuning.v1.json" "examples/recommendation-tuning.v2.json" "recommendations" "recommendation tuning"
-seed_pair "rate-limiter-service.policy" "examples/rate-limiter-policy.schema.json" "examples/rate-limiter-policy.v1.json" "examples/rate-limiter-policy.v2.json" "traffic" "rate limiter policy"
 seed_pair "checkout-service.timeout" "examples/timeout.schema.json" "examples/timeout.v1.json" "examples/timeout.v2.json" "checkout" "checkout timeout"
 
 echo "Seeded platform demo configs in environment '${ENVIRONMENT}'."

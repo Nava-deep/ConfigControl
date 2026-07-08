@@ -7,7 +7,7 @@ This repository is not framed as a single-service config API. It is framed as a 
 The primary example services are:
 - `payment-service.flags`
 - `recommendation-service.tuning`
-- `rate-limiter-service.policy`
+- `checkout-service.timeout`
 
 ## Payment service
 
@@ -33,16 +33,16 @@ Why it matters:
 - staged rollout helps validate a new tuning profile before full promotion
 - automatic rollback is critical when ranking changes hurt error rate or latency
 
-## Rate limiter
+## Checkout service
 
 This service uses the platform to manage:
-- normal request-per-minute limits
-- burst behavior
-- safe-mode limits during degraded operation
+- timeout behavior
+- network retry controls
+- conservative fallback behavior during degraded operation
 
 Why it matters:
-- a bad rate-limit config can cause outages or traffic floods
-- the safe-mode concept is easy to explain here: when the control plane is unavailable, clients can continue operating with last-known-good policy and a reduced blast radius
+- checkout behavior changes are operationally sensitive
+- clients can continue operating with last-known-good config when the control plane is unavailable
 
 ## Staged canary progression
 
