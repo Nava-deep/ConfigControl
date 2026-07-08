@@ -135,6 +135,23 @@ export default function LiveUsers() {
     };
   }, [selectedConfig, targetCluster]);
 
+  // Helper to safely mutate a value without adding new properties (to pass strict schemas)
+  const mutateJson = (obj: any): any => {
+    if (typeof obj === 'number') return obj + 1;
+    if (typeof obj === 'boolean') return !obj;
+    if (typeof obj === 'string') return obj + " (canary)";
+    if (Array.isArray(obj) && obj.length > 0) {
+      return [mutateJson(obj[0]), ...obj.slice(1)];
+    }
+    if (typeof obj === 'object' && obj !== null) {
+      const keys = Object.keys(obj);
+      if (keys.length > 0) {
+        return { ...obj, [keys[0]]: mutateJson(obj[keys[0]]) };
+      }
+    }
+    return obj;
+  };
+
   const triggerRollout = async (percent: number) => {
     if (!selectedConfig) return;
     
@@ -146,7 +163,8 @@ export default function LiveUsers() {
         });
         const currentData = await getRes.json();
         
-        const newValue = { ...currentData.value, _canary_timestamp: Date.now() };
+        // Mutate safely to avoid strict schema additionalProperties errors
+        const newValue = mutateJson(currentData.value);
         
         const createRes = await fetch(`${API}/configs`, {
           method: 'POST',
@@ -327,10 +345,12 @@ export default function LiveUsers() {
            <div style={{ width: '16px', height: '16px', background: getVersionColor(stableVersion), borderRadius: '4px' }}></div>
            <span>v{stableVersion} (Stable)</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
-           <div style={{ width: '16px', height: '16px', background: getVersionColor(latestVersion), borderRadius: '4px' }}></div>
-           <span>v{latestVersion} (Canary)</span>
-        </div>
+        {latestVersion > stableVersion && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+             <div style={{ width: '16px', height: '16px', background: getVersionColor(latestVersion), borderRadius: '4px' }}></div>
+             <span>v{latestVersion} (Canary)</span>
+          </div>
+        )}
       </div>
     </div>
   );
